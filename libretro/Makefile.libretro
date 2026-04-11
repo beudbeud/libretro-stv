@@ -1,0 +1,88 @@
+# Makefile.libretro — build mednafen_stv_libretro.so
+# Usage: make -f libretro/Makefile.libretro TARGET_CROSS=aarch64-buildroot-linux-gnu-
+
+TARGET_NAME := mednafen_stv
+CORE_DIR    := $(CURDIR)
+BUILD_DIR   := $(CORE_DIR)/build_libretro
+
+CXX := $(TARGET_CROSS)g++
+AR  := $(TARGET_CROSS)ar
+
+$(shell mkdir -p $(BUILD_DIR))
+$(shell cp $(CORE_DIR)/libretro/config_libretro.h $(BUILD_DIR)/config.h)
+
+DEFINES := \
+    -DHAVE_CONFIG_H \
+    -DLIBRETRO_BUILD=1 \
+    -D__LIBRETRO__=1 \
+    -DWANT_SS_EMU=1 \
+    -DMDFN_DISABLE_PICPIE_ERRWARN=1 \
+    -D_LARGEFILE_SOURCE \
+    -D_LARGEFILE64_SOURCE \
+    -D_FILE_OFFSET_BITS=64
+
+INCLUDES := \
+    -I$(CORE_DIR)/libretro/wrapper_include \
+    -I$(BUILD_DIR) \
+    -I$(CORE_DIR)/src \
+    -I$(CORE_DIR)/src/minilzo
+
+CXXFLAGS := \
+    -std=c++11 -O3 \
+    -fsigned-char -fwrapv -fexceptions \
+    -fno-fast-math -fno-unsafe-math-optimizations \
+    -fno-aggressive-loop-optimizations -fno-ipa-icf \
+    -fno-printf-return-value -fstrict-aliasing \
+    -fPIC -fvisibility=hidden \
+    $(DEFINES) $(INCLUDES) \
+    -include $(BUILD_DIR)/config.h
+
+ifneq ($(filter aarch64%,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
+  CXXFLAGS += -mcpu=cortex-a76
+endif
+
+LDFLAGS := -shared \
+    -Wl,-soname,$(TARGET_NAME)_libretro.so \
+    -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
+    -lz -lpthread -lzstd
+
+CORE_SRCS :=
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/input/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/cart/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/cdrom/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/video/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/sound/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/compress/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/string/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hash/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/time/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/resampler/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/v810/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/m68k/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/z80-fuse/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_misc/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_sound/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_video/*.cpp)
+CORE_SRCS := $(filter-out $(CORE_DIR)/src/drivers/%, $(CORE_SRCS))
+
+LIBRETRO_SRCS := $(CORE_DIR)/libretro/libretro.cpp
+ALL_SRCS := $(LIBRETRO_SRCS) $(CORE_SRCS)
+OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_SRCS))
+TARGET := $(CORE_DIR)/$(TARGET_NAME)_libretro.so
+
+.PHONY: all clean
+
+all: $(TARGET)
+	@echo "Built: $@"
+
+$(TARGET): $(OBJS)
+	$(CXX) -o $@ $^ $(LDFLAGS)
+
+$(BUILD_DIR)/%.o: $(CORE_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -rf $(BUILD_DIR) $(TARGET)

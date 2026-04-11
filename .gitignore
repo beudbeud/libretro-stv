@@ -1,5 +1,3 @@
-/src/mednafen*
-!/src/mednafen*.*
 *.o
 *.o2
 *.a

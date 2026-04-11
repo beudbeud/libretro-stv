@@ -559,8 +559,10 @@ MDFN_HIDE extern const Mednafen::MDFNGI EmulatedSMS, EmulatedGG;
 MDFN_HIDE extern const Mednafen::MDFNGI EmulatedSASPlay;
 #endif
 
+#ifndef LIBRETRO_BUILD
 MDFN_HIDE extern const Mednafen::MDFNGI EmulatedCDPlay;
 MDFN_HIDE extern const Mednafen::MDFNGI EmulatedDEMO;
+#endif
 
 namespace Mednafen
 {
@@ -1542,13 +1544,18 @@ bool MDFNI_Init(void)
    &EmulatedSASPlay,
    #endif
 
+#ifndef LIBRETRO_BUILD
    &EmulatedCDPlay,
-   &EmulatedDEMO
+   &EmulatedDEMO,
+#endif
+   nullptr
   };
   static_assert(MEDNAFEN_VERSION_NUMERIC >= 0x00103200 && MEDNAFEN_VERSION_NUMERIC < 0x00200000, "Bad MEDNAFEN_VERSION_NUMERIC");
 
   for(unsigned int i = 0; i < sizeof(InternalSystems) / sizeof(MDFNGI *); i++)
-   AddSystem(InternalSystems[i]);
+  {
+   if(InternalSystems[i]) AddSystem(InternalSystems[i]);
+  }
 
   for(unsigned int i = 0; i < MDFNSystems.size(); i++)
    MDFNSystemsPrio.push_back(MDFNSystems[i]);
