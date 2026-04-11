@@ -82,7 +82,9 @@ void STVIO_SetCrosshairsColor(unsigned port, uint32 color)
 
 void STVIO_TransformInput(void)
 {
- *DPtr[12] &= ~0x01; // Zero SS reset button bit to SMPC.
+ /* DPtr[12] must be set via MDFNI_SetInput(12, 0) "builtin" before Emulate() */
+ if(MDFN_LIKELY(DPtr[12] != nullptr))
+  *DPtr[12] &= ~0x01; // Zero SS reset button bit to SMPC.
 }
 
 void STVIO_UpdateInput(int32 elapsed_time)

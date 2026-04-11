@@ -1103,6 +1103,16 @@ static INLINE void ABusRW_DB(uint32 A, uint16* DB, int32* time_thing, int32* dma
     *time_thing += 8;
   }
 
+  /* Log EVERY CS2 access unconditionally to /tmp/cs2_raw.log */
+  {
+   static FILE* cs2_raw = nullptr;
+   if(!cs2_raw) cs2_raw = fopen("/tmp/cs2_raw.log","w");
+   if(cs2_raw) {
+    fprintf(cs2_raw, "%s @%08x DB=%04x\n", IsWrite?"W":"R", A, (unsigned)*DB);
+    fflush(cs2_raw);
+   }
+  }
+
   if((A & 0x7FFF) < 0x1000)
   {
    const uint32 offset = (A & 0x3F) >> 2;
@@ -1110,12 +1120,29 @@ static INLINE void ABusRW_DB(uint32 A, uint16* DB, int32* time_thing, int32* dma
 
    if(IsWrite)
    {
+    /* Write to both chip (config) and CDB (game state machine) */
+    if(sizeof(T) == 1)
+     CART_CS2_Write8_DB(A, DB);
+    else
+     CART_CS2_Write16_DB(A, DB);
     CDB_Write_DBM(offset, *DB, mask);
    }
    else
    {
-    if(!SH32 || !(A & 0x80000)) // CD block seems to effectively ignore second read access in 32-bit reads somehow, tested to occur HIRQ and the FIFO at least...
-     *DB = CDB_Read(offset);
+    if(!SH32 || !(A & 0x80000))
+    {
+     /* When chip is active: return chip decompressed output.
+      * When chip is NOT active: use CDB_Read so the game sees
+      * the exact register values it polls before configuring the chip.
+      * This is what allowed the game to proceed to writes in the
+      * original CDB-only path.                                        */
+     { MDFN_HIDE extern bool CART_STV_Chip5838IsActive(void) noexcept;
+       if(CART_STV_Chip5838IsActive())
+        CART_CS2_Read16_DB(A, DB);
+       else
+        *DB = CDB_Read(offset);
+     }
+    }
    }
    return;
   }

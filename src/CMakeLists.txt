@@ -74,6 +74,7 @@ add_library(mdfn_core STATIC
 )
 
 set_target_properties(mdfn_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_source_files_properties(ss/cart/stv.cpp PROPERTIES COMPILE_FLAGS "-fPIC")
 
 # ── Includes ──────────────────────────────────────────────────────────────────
 target_include_directories(mdfn_core BEFORE PUBLIC

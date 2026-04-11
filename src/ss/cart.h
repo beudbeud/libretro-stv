@@ -30,6 +30,7 @@ namespace MDFN_IEN_SS
 
 struct CartInfo
 {
+ bool is_stv = false;  /* true for ST-V (no CD drive) */
  void (*Reset)(bool powering_up);
  void (*Kill)(void);
 

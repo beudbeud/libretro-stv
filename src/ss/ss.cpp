@@ -1623,7 +1623,7 @@ static MDFN_COLD bool TestMagic(GameFile* gf)
  {
   const std::string fname = gf->fbase + (gf->ext.size() ? "." : "") + gf->ext;
 
-  if(DB_LookupSTV(fname, gf->stream))
+  if(DB_LookupSTV(fname, gf->stream, gf->vfs, gf->dir))
    return true;
  }
 
@@ -1668,7 +1668,7 @@ static MDFN_COLD void Load(GameFile* gf)
 
  try
  {
-  const STVGameInfo* sgi = DB_LookupSTV(gf->fbase + (gf->ext.size() ? "." : "") + gf->ext, gf->stream);
+  const STVGameInfo* sgi = DB_LookupSTV(gf->fbase + (gf->ext.size() ? "." : "") + gf->ext, gf->stream, gf->vfs, gf->dir);
 
   if(sgi)
   {

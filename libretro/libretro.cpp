@@ -281,7 +281,16 @@ static void apply_options()
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&var) && var.value) \
         MDFNI_SetSetting(setting, var.value);
 
-    STR_OPT ("mednafen_stv_region",       "ss.region_default");
+    /* Region: "auto" enables autodetect; explicit region disables it. */
+    var.key = "mednafen_stv_region";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if(strcmp(var.value, "auto") == 0) {
+            MDFNI_SetSetting("ss.region_autodetect", "1");
+        } else {
+            MDFNI_SetSetting("ss.region_autodetect", "0");
+            MDFNI_SetSetting("ss.region_default", var.value);
+        }
+    }
     BOOL_OPT("mednafen_stv_h_overscan",   "ss.h_overscan");
     BOOL_OPT("mednafen_stv_h_blend",      "ss.h_blend");
     BOOL_OPT("mednafen_stv_correct_aspect","ss.correct_aspect");
@@ -344,16 +353,24 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
      * 320x240 @ 59.826Hz is the Saturn NTSC nominal.                   */
     /* Use actual nominal dimensions from loaded game when available.
      * nominal_height = slend - slstart + 1, computed by VDP2REND_SetGetVideoParams.
-     * MAME reports 224 (8..231) for RSgun — we match that with our defaults. */
-    info->geometry.base_width   = game_info ? game_info->nominal_width  : 320;
-    info->geometry.base_height  = game_info ? game_info->nominal_height : 224;
-    info->geometry.max_width    = FB_W;
-    info->geometry.max_height   = FB_H;
+     * MAME reports 224 (8..231) for RSgun — we match that with our defaults.
+     *
+     * CRITICAL for SwitchRes: max_height must equal base_height, NOT FB_H.
+     * RetroArch passes max_height to SwitchRes as the "source" height.
+     * If max_height=512 (FB_H), SwitchRes computes Y_fractal = 240/512 = 0.47
+     * instead of 240/448 = 0.535 that MAME gets with its 224-line geometry. */
+    int nom_w = game_info ? game_info->nominal_width  : 320;
+    int nom_h = game_info ? game_info->nominal_height : 224;
+    info->geometry.base_width   = nom_w;
+    info->geometry.base_height  = nom_h;
+    info->geometry.max_width    = FB_W;   /* framebuffer width (required for Saturn variable H-res) */
+    info->geometry.max_height   = nom_h;  /* = base_height: SwitchRes uses this for fractal Y calc */
     info->geometry.aspect_ratio = 4.0f / 3.0f;
     info->timing.fps            = game_info
         ? (double)game_info->fps / (65536.0 * 256.0) : 59.826;
     info->timing.sample_rate    = 44100.0;
 }
+
 
 
 RETRO_API void retro_init(void)
@@ -509,7 +526,7 @@ RETRO_API void retro_run(void)
         if(g_last_w > 0) {
             retro_game_geometry geo={};
             geo.base_width=g_last_w; geo.base_height=g_last_h;
-            geo.max_width=FB_W; geo.max_height=FB_H;
+            geo.max_width=FB_W;      geo.max_height=g_last_h;
             geo.aspect_ratio = 4.f/3.f;
             environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
         }
@@ -556,21 +573,27 @@ RETRO_API void retro_run(void)
     }
     if(dw<=0) dw=320; if(dh<=0) dh=240;
 
-    /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change,
-     * no debounce. Also triggered by variable updates (see below).    */
-    if(dw != g_last_w || dh != g_last_h) {
-        g_last_w = dw; g_last_h = dh;
+    /* Interlaced: DisplayRect.h = full frame (e.g. 480). For geometry/SwitchRes
+     * we report the field height (240) — the actual scanline count on the CRT.
+     * video_cb still gets the full height so the deinterlacer can work.       */
+    int display_h = espec.InterlaceOn ? dh / 2 : dh;
+
+    /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
+    if(dw != g_last_w || display_h != g_last_h) {
+        g_last_w = dw; g_last_h = display_h;
         retro_game_geometry geo={};
         geo.base_width   = dw;
-        geo.base_height  = dh;
+        geo.base_height  = display_h;
         geo.max_width    = FB_W;
-        geo.max_height   = FB_H;
+        geo.max_height   = display_h;  /* = base_height for correct SwitchRes fractal Y */
         geo.aspect_ratio = 4.f / 3.f;
         environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
     }
 
     const uint32_t *px = reinterpret_cast<const uint32_t*>(surf->pixels)
         + (uint64_t)dr.y * surf->pitchinpix + dr.x;
+    /* For interlaced frames, we pass the full dh so RA can deinterlace.
+     * The pitch stays the same (full framebuffer row stride).            */
     video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
 
     /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer */

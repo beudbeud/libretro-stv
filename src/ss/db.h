@@ -93,12 +93,14 @@ struct STVGameInfo
  unsigned area;
  unsigned control;
  unsigned ec_chip;
+ uint32_t  ec_key;    /* per-game encryption key for 315-5881 */
  unsigned romtwiddle;
  bool rotate;
  STVROMLayout rom_layout[16];
 };
 
-const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s);
+const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
+                                 VirtualFS* vfs = nullptr, const std::string& dir = "");
 
 void DB_GetInternalDB(std::vector<GameDB_Database>* databases) MDFN_COLD;
 std::string DB_GetHHDescriptions(const uint32 hhv) MDFN_COLD;
