@@ -22,14 +22,14 @@
 /*
  TODO:
 	315-5881 decryption support
-
-	Decathlete decryption/decompression chip support
 */
 
 
 #include "common.h"
 #include "stv.h"
 #include "../db.h"
+#include "chip315_5838.h"
+#include "chip315_5881.h"
 
 #include <mednafen/hash/sha256.h>
 #include <mednafen/Time.h>
@@ -38,6 +38,7 @@ namespace MDFN_IEN_SS
 {
 
 static unsigned ECChip;
+
 static uint16* ROM;
 #ifdef MDFN_ENABLE_DEV_BUILD
 static uint8 ROM_Mapped[0x3000000 / sizeof(uint16)];
@@ -46,8 +47,55 @@ static uint8 ROM_Mapped[0x3000000 / sizeof(uint16)];
 static uint8 rsg_thingy;
 static uint8 rsg_counter;
 
+/* 315-5838 decompression chip state (Decathlete) */
+static Chip5838 chip5838;
+
+/* 315-5881 encryption chip state (Astra, Final Fight, Steep Slope, Tecmo, Elan) */
+static Chip5881 chip5881;
+
 static MDFN_HOT void ROM_Read(uint32 A, uint16* DB)
 {
+ /* 315-5838: MAME decathlt_prot_r at 0x27FFFF8-B, 0x2FFFFF8-B, 0x37FFFF8-B.
+  * The ROM bank is determined by bits [24:23] of the READ address.
+  * In MAME, protbank is set to match the bank of the WRITE address, but for
+  * reads the bank is implicit in which read address the CPU uses.
+  * We select the bank from the read address directly before calling data_r(). */
+ if(MDFN_UNLIKELY(ECChip == STV_EC_CHIP_315_5838 && chip5838.active))
+ {
+  const uint32 off  = (A - 0x02000000) & 0x7FFFFF;
+  const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
+  if(MDFN_UNLIKELY(off >= 0x7FFFF8))
+  {
+   chip5838.set_bank(bank);   /* select bank from read address */
+   *DB = chip5838.data_r();
+   return;
+  }
+ }
+
+ /* 315-5881 chip read — MAME common_prot_r at 0x04FFFFF0-0x04FFFFFF.
+  * Only offset 3 (0x04FFFFFC/FE) returns decrypted data when chip is enabled.
+  * Other offsets return the last value written (mirrored) or ROM fallback. */
+ if(MDFN_UNLIKELY(ECChip == STV_EC_CHIP_315_5881 && A >= 0x04FFFFF0 && A <= 0x04FFFFFF))
+ {
+  const uint32 dw_off = (A - 0x04FFFFF0) >> 2;  /* DWORD offset 0-3 */
+  if(chip5881.protenable & 0x00010000)            /* chip enabled */
+  {
+   if(dw_off == 3)                                /* offset 3 = data read */
+   {
+    *DB = chip5881.decrypt_le_r();
+   }
+   else
+   {
+    *DB = 0xFFFF;
+   }
+  }
+  else
+  {
+   /* Chip disabled: MAME returns ROM data at 0x02FFFFF0 + offset */
+   *DB = *(uint16*)((uint8*)ROM + ((A - 0x2000000) & 0x3FFFFFE));  }
+  return;
+ }
+
  *DB = *(uint16*)((uint8*)ROM + ((A - 0x2000000) & 0x3FFFFFE));
 
  //printf("ROM %08x %04x\n", A, *DB);
@@ -79,7 +127,101 @@ uint8 CART_STV_PeekROM(uint32 A)
 template<typename T>
 static MDFN_HOT void Write(uint32 A, uint16* DB)
 {
- //printf("Write%u: %08x %04x\n", (unsigned)sizeof(T), A, *DB);
+ if(ECChip == STV_EC_CHIP_315_5838)
+ {
+  /* 315-5838 (Decathlete) — MAME architecture:
+   * Writes to the last 16 bytes of each 8MB ROM bank configure the chip.
+   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF0 → srcaddr hi (usually 0)
+   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF2 → srcaddr lo  (word offset)
+   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF4 → data_w
+   * Bank selected by bits [24:23] of byte offset.
+   * Also handled via CS2 dual-dispatch in scu.inc for compatibility.  */
+  if(sizeof(T) == 2)
+  {
+   const uint32 off = (A - 0x02000000) & 0x7FFFFF;
+   const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
+   if(MDFN_UNLIKELY(off == 0x7FFFF0))
+   {
+    chip5838.pending_srcaddr_hi = (uint32)*DB << 16;
+    return;
+   }
+   if(MDFN_UNLIKELY(off == 0x7FFFF2))
+   {
+    uint32 full = (chip5838.pending_srcaddr_hi | *DB) & 0x007FFFFF;
+    chip5838.pending_srcaddr_hi = 0;  /* reset for next write */
+    chip5838.set_bank(bank);
+    chip5838.srcaddr_w16(full);  /* full is 23-bit — preserve all bits */    return;
+   }
+   if(MDFN_UNLIKELY(off == 0x7FFFF4 || off == 0x7FFFF6))
+   {
+    /* data_w: table upload — select bank first so each bank has its own cs */
+    chip5838.active_bank = (int)bank;
+    if(off == 0x7FFFF4)
+     chip5838.set_table_upload_mode_w(*DB);
+    else
+     chip5838.upload_table_data_w(*DB);
+    return;
+   }
+  }
+  return;
+ }
+
+ if(ECChip == STV_EC_CHIP_315_5881)
+ {
+  /* 315-5881 — MAME common_prot_w at 0x04FFFFF0-0x04FFFFFF:
+   *  offset 0 (0x04FFFFF0-3) → protenable  (bit 0x00010000 = enable)
+   *  offset 2 (0x04FFFFF8-B) → addr_low / addr_high
+   *  offset 3 (0x04FFFFFC-F) → subkey
+   * SH-2 may use byte writes (MOV.B). In mednafen big-endian byte convention:
+   *   odd  address (A&1=1): byte = (DB >> 8) & 0xFF  (high byte of DB)
+   *   even address (A&1=0): byte = DB & 0xFF          (low byte of DB)
+   * Byte N (A&3=N) maps to bits [(3-N)*8 +7 : (3-N)*8] of the 32-bit word. */
+  if(A >= 0x04FFFFF0 && A <= 0x04FFFFFF)
+  {
+   const uint32 dw_off = (A - 0x04FFFFF0) >> 2;
+   uint32 val32 = 0;
+   uint32 mask32 = 0;
+
+   if(sizeof(T) == 2)
+   {
+    /* 16-bit write: update high or low half of the 32-bit word */
+    const bool hi = !((A >> 1) & 1);
+    if(hi) { val32 = (uint32)*DB << 16; mask32 = 0xFFFF0000; }
+    else   { val32 = *DB;               mask32 = 0x0000FFFF; }
+   }
+   else  /* sizeof(T) == 1: byte write */
+   {
+    /* odd addr → high byte of DB; even addr → low byte of DB */
+    const uint8 bval = (A & 1) ? ((*DB >> 8) & 0xFF) : (*DB & 0xFF);
+    const uint32 shift = (3 - (A & 3)) * 8;  /* BE bit position */
+    val32  = (uint32)bval << shift;
+    mask32 = 0xFFU << shift;
+   }
+
+   if(dw_off == 0)  /* protenable */
+   {
+    chip5881.protenable = (chip5881.protenable & ~mask32) | val32;
+   }
+   else if(dw_off == 2)  /* source address */
+   {
+    if(mask32 & 0xFFFF0000)  /* affects high half → addr_low */
+    {
+     chip5881.set_addr_low((val32 >> 16) & 0xFFFF);    }
+    if(mask32 & 0x0000FFFF)  /* affects low half → addr_high */
+    {
+     chip5881.set_addr_high(val32 & 0xFFFF);    }
+   }
+   else if(dw_off == 3)  /* subkey */
+   {
+    if(mask32 & 0xFFFF0000)
+    {
+     chip5881.set_subkey((val32 >> 16) & 0xFFFF);    }
+   }
+   else
+   {   }
+  }
+  return;
+ }
 
  if(A >= 0x04FFFFF0 && ECChip == STV_EC_CHIP_RSG)
  {
@@ -94,10 +236,26 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
  }
 }
 
+static CartInfo* g_CartPtr = nullptr;  /* Save cart pointer for diagnostics */
+
+/* Exposed to scu.inc dual dispatch */
+bool CART_STV_Chip5838IsActive(void) noexcept
+{
+ return (ECChip == STV_EC_CHIP_315_5838) && chip5838.active;
+}
+
 static void Reset(bool powering_up)
 {
  rsg_thingy = 0;
  rsg_counter = 0;
+ if(ECChip == STV_EC_CHIP_315_5838)
+  chip5838.reset();
+ if(ECChip == STV_EC_CHIP_315_5881)
+  chip5881.reset();
+ /* Diagnostic: verify is_stv flag */
+ if(g_CartPtr)
+  MDFN_printf("[CART-STV] Reset: is_stv=%d ECChip=%u\n",
+   (int)g_CartPtr->is_stv, ECChip);
 }
 
 static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
@@ -106,6 +264,33 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
  {
   SFVAR(rsg_thingy),
   SFVAR(rsg_counter),
+  /* 315-5838 chip state */
+  SFVAR(chip5838.srcoffset),
+  SFVAR(chip5838.srcstart),
+  SFVAR(chip5838.abort),
+  SFVAR(chip5838.val_compressed),
+  SFVAR(chip5838.num_bits_compressed),
+  SFVAR(chip5838.val),
+  SFVAR(chip5838.num_bits),
+  SFVAR(chip5838.active_bank),
+  SFPTR8N((uint8*)chip5838.cs, sizeof(chip5838.cs), "chip5838_cs4"),
+
+  /* 315-5881 chip state */
+  SFVAR(chip5881.prot_cur_address),
+  SFVAR(chip5881.subkey),
+  SFVAR(chip5881.protenable),
+  SFVAR(chip5881.enc_ready),
+  SFVAR(chip5881.dec_hist),
+  SFVAR(chip5881.dec_header),
+  SFVAR(chip5881.buffer_pos),
+  SFVAR(chip5881.buffer_bit),
+  SFVAR(chip5881.buffer_bit2),
+  SFVAR(chip5881.buffer2a),
+  SFVAR(chip5881.line_buffer_pos),
+  SFVAR(chip5881.line_buffer_size),
+  SFPTR8N(chip5881.buffer, BUFFER_SIZE, "chip5881_buf"),
+  SFPTR8N(chip5881.line_buffer, LINE_SIZE, "chip5881_lb"),
+  SFPTR8N(chip5881.line_buffer_prev, LINE_SIZE, "chip5881_lbp"),
 
   SFEND
  };
@@ -127,6 +312,66 @@ static void Kill(void)
  }
 }
 
+
+
+/* ── A-bus CS2 handlers (0x05800000-0x058FFFFF) ─────────────────────────
+ *
+ * 315-5838 register map discovered empirically (Decathlete):
+ *   CS2 offset 0x08  (idx 4) : srcaddr_w16 / data_r
+ *   CS2 offset 0x0a  (idx 5) : srcaddr_w16 second half / data_r
+ *   CS2 offset 0x18  (idx 12): set_table_upload_mode_w
+ *   CS2 offset 0x1a-0x26 (13-19): upload_table_data_w / data_r
+ *
+ * All reads return decompressed output (data_r).
+ * Writes to even offsets (0x18,0x1c,0x20,0x24) = set_table_upload_mode_w
+ * Writes to odd  offsets (0x1a,0x1e,0x22,0x26) = upload_table_data_w     */
+
+
+static MDFN_HOT void CS2_Read_diag(uint32 A, uint16* DB)
+{
+ if(ECChip == STV_EC_CHIP_315_5838) {
+  if(!chip5838.active) {
+   *DB = 0x0000;
+  } else {
+   /* CS2 path = raw decipher mode (no Huffman).
+    * MAME's init_decathlt only maps the 5838 chip over CS01 (0x2000000-0x37FFFFF).
+    * The CS2 protection check at srcoffset=0x0be1 expects decipher(ROM_word)
+    * returned directly — for that word: decipher(0x1533) = 0x16be.            */
+   *DB = chip5838.data_r_raw();
+  }
+ } else if(ECChip == STV_EC_CHIP_315_5881) {
+  *DB = chip5881.decrypt_le_r();
+ } else {
+  *DB = 0xFFFF;
+ }
+}
+
+static MDFN_HOT void CS2_Write8_diag(uint32 A, uint16* DB)
+{
+ /* 8-bit writes not expected; ignore */
+}
+
+static MDFN_HOT void CS2_Write16_diag(uint32 A, uint16* DB)
+{
+ const uint32 off = A & 0x3E;
+
+ if(ECChip == STV_EC_CHIP_315_5838) {
+  if(off == 0x08 || off == 0x0a) {
+   chip5838.srcaddr_w16(*DB);
+  } else if(off == 0x18 || off == 0x1c || off == 0x20 || off == 0x24) {
+   chip5838.active_bank = 0;  /* CS2 = bank 0 */
+   chip5838.set_table_upload_mode_w(*DB);
+  } else {
+   chip5838.active_bank = 0;
+   chip5838.upload_table_data_w(*DB);
+  }
+ } else if(ECChip == STV_EC_CHIP_315_5881) {
+  if(off == 0x08)       chip5881.set_addr_low(*DB);
+  else if(off == 0x0a)  chip5881.set_addr_high(*DB);
+  else if(off == 0x0c)  chip5881.set_subkey(*DB);
+ }
+}
+
 void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
 {
  assert(gf && sgi);
@@ -137,6 +382,9 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
   sha256_hasher h;
 
   ECChip = sgi->ec_chip;
+  c->is_stv = true;
+  g_CartPtr = c;
+  MDFN_printf("[CART-STV] Init: is_stv=%d ECChip=%u\n", (int)c->is_stv, ECChip);
 
   ROM = new uint16[0x3000000 / sizeof(uint16)];
   memset(ROM, 0xFF, 0x3000000);
@@ -150,7 +398,11 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
    const STVROMLayout* prev_rle = i ? &sgi->rom_layout[i - 1] : nullptr;
    const bool gf_fname_match = !MDFN_strazicmp(fname, rle->fname);
    const std::string fpath = gf->vfs->eval_fip(gf->dir, gf_fname_match ? fname : rle->fname);
-   const bool prev_match = prev_rle && !strcmp(rle->fname, prev_rle->fname);
+   /* prev_match: same file already loaded — copy instead of re-reading.
+    * Require same map type so that RELOAD_PLAIN (STV_MAP_16LE) after a
+    * STV_MAP_BYTE entry loads fresh from the ZIP (= plain sequential bytes). */
+   const bool prev_match = prev_rle && !strcmp(rle->fname, prev_rle->fname)
+                           && rle->map == prev_rle->map && rle->size == prev_rle->size;
    std::unique_ptr<Stream> ns;
    Stream* s;
 
@@ -251,6 +503,47 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
   SS_SetPhysMemMap (0x02000000, 0x04FFFFFF, ROM, 0x3000000, false);
   c->CS01_SetRW8W16(0x02000000, 0x04FFFFFF, ROM_Read, Write<uint8>, Write<uint16>);
 
+  /* Protection chips are in A-bus CS2 (0x05800000-0x058FFFFF).
+   * CS2M offset = (A >> 1) & 0x1F, A = 0x05800000 + offset*2.
+   * Register map (both 5838 and 5881 use CS2):
+   *   0x05800000 (offset 0x00): 5838 srcaddr / 5881 addrlo
+   *   0x05800002 (offset 0x02): 5838 (unused) / 5881 addrhi
+   *   0x05800004 (offset 0x04): 5838 data_r / 5881 subkey
+   *   0x05800006 (offset 0x06): 5838 table_mode / 5881 data_r
+   * These are discovered via diagnostic; correct if needed.              */
+  /* CS2 (A-bus CS2, 0x05800000-0x058FFFFF) — diagnostic handlers.
+   * Uses static wrapper functions defined below to avoid PIC relocation
+   * issues when storing function pointers from the static lib.            */
+   c->CS2M_SetRW8W16(0x00, 0x3F, CS2_Read_diag, CS2_Write8_diag, CS2_Write16_diag);
+
+  /* 315-5838: connect chip to MPR ROMs (not the full ROM array).
+   * The 315-5838 is physically wired to the MPR ROM chips which start
+   * at byte offset 0x400000 in our ROM array (= word offset 0x200000).
+   * srcoffset=0 in the chip = first word of mpr18968.2.              */
+  if(ECChip == STV_EC_CHIP_315_5838)
+  {
+   static const uint32 MPR_WORD_OFFSET = 0x200000; /* byte 0x400000 / 2 */
+   chip5838.reset();
+   chip5838.rom            = ROM + MPR_WORD_OFFSET;  /* bank 0 default (MPR0, CS2 BIOS check) */
+   chip5838.rom_base       = ROM + MPR_WORD_OFFSET;  /* invariant MPR0 base for CS2           */
+   chip5838.rom_phys       = ROM;                    /* ROM byte-0 base for CS01 physical map */
+   chip5838.rom_size_words = (0x3000000 / sizeof(uint16)) - MPR_WORD_OFFSET;
+   chip5838.pending_srcaddr_hi = 0;
+   MDFN_printf(_("[CART-STV] 315-5838 decipher chip enabled (Decathlete)\n"));
+  }
+
+  /* 315-5881: initialize with per-game key and connect to cart ROM */
+  if(ECChip == STV_EC_CHIP_315_5881)
+  {
+   chip5881.reset();
+   chip5881.rom            = ROM;
+   chip5881.rom_size_words = 0x3000000 / sizeof(uint16);
+   /* Pre-load game key. The game will also write subkey via register.
+    * game_key is fixed per-game; subkey comes from the game at runtime. */
+   chip5881.game_key = sgi->ec_key;
+   MDFN_printf(_("[CART-STV] 315-5881 encryption chip enabled (key=0x%08X)\n"), sgi->ec_key);
+  }
+
   c->StateAction = StateAction;
   c->Reset = Reset;
   c->Kill = Kill;
@@ -262,4 +555,4 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
  }
 }
 
-}
+} // namespace MDFN_IEN_SS

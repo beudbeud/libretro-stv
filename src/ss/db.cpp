@@ -513,10 +513,13 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_315_5881,
+   0x052E2901,  /* Kronos/MAME key */
   STV_ROMTWIDDLE_NONE,
   false,
   {
    { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr20825.13" },
+   { 0x0200000, 0x0100000, STV_MAP_16LE,  "epr20825.13" },  /* GAME_BYTE_BLOB reload */
+   { 0x0300000, 0x0100000, STV_MAP_16LE,  "epr20825.13" },  /* GAME_BYTE_BLOB reload */
 
    { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20827.2" },
    { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20828.3" },
@@ -534,6 +537,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -552,6 +556,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -574,6 +579,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -593,6 +599,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -608,6 +615,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -627,6 +635,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -645,6 +654,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_EU_PAL,
   STV_CONTROL_HAMMER,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -661,6 +671,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_SANJEON,
   false,
   {
@@ -684,6 +695,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -701,6 +713,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -723,6 +736,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -758,6 +772,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_315_5838,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -777,6 +792,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_315_5838,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -795,6 +811,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_NA,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -812,6 +829,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -829,6 +847,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -848,6 +867,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -874,6 +894,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_315_5881,
+   0x0524AC01,  /* Kronos/MAME key */
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -894,6 +915,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -919,6 +941,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -940,6 +963,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -960,6 +984,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -980,6 +1005,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -998,6 +1024,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1014,6 +1041,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1035,6 +1063,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1053,6 +1082,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1073,6 +1103,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1095,6 +1126,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1115,6 +1147,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1131,6 +1164,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1147,6 +1181,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1166,6 +1201,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1183,6 +1219,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1199,6 +1236,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1221,6 +1259,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1246,6 +1285,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1270,6 +1310,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_NA,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1289,6 +1330,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_RSG,
   STV_EC_CHIP_RSG,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1305,6 +1347,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1328,6 +1371,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1349,6 +1393,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1362,6 +1407,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   true,
   {
@@ -1377,6 +1423,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1395,6 +1442,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1414,6 +1462,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1432,6 +1481,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_NA,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1449,6 +1499,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_315_5881,
+   0x052B6901,  /* Kronos/MAME key (Steep Slope Sliders) */
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1469,6 +1520,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1492,6 +1544,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1513,6 +1566,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_NA,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1532,6 +1586,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1550,6 +1605,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_HAMMER,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1568,6 +1624,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1585,15 +1642,60 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_315_5881,
+   0x05200913,  /* Kronos/MAME key */
   STV_ROMTWIDDLE_NONE,
   false,
   {
-   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr20819.13" },
+   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr20819.24" },
+   { 0x0200000, 0x0100000, STV_MAP_16LE,  "epr20819.24" },  /* ROM_RELOAD_PLAIN */
+   { 0x0300000, 0x0100000, STV_MAP_16LE,  "epr20819.24" },  /* ROM_RELOAD_PLAIN */
 
-   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20821.2" },
-   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20822.3" },
-   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr20823.4" },
-   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr20824.5" },
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20821.12" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20822.13" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr20823.14" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr20824.15" },
+  }
+ },
+
+ {
+  "Tecmo World Soccer '98",
+  SMPC_AREA_JP,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_315_5881,
+   0x05200913,  /* Kronos/MAME key */
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr-20820.ic24" },
+   { 0x0200000, 0x0100000, STV_MAP_16LE,  "epr-20820.ic24" },  /* ROM_RELOAD_PLAIN */
+   { 0x0300000, 0x0100000, STV_MAP_16LE,  "epr-20820.ic24" },  /* ROM_RELOAD_PLAIN */
+
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20821.12" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20822.13" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr20823.14" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr20824.15" },
+  }
+ },
+
+ {
+  "Suiko Enbu / Outlaws of the Lost Dynasty",
+  SMPC_AREA_JP,
+  STV_CONTROL_6B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "fpr17834.13" },
+
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr17836.2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr17837.3" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr17838.4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr17839.5" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr17840.6" },
+   { 0x1800000, 0x0400000, STV_MAP_16LE, "mpr17835.1" },
+   { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr17841.8" },
+   { 0x2000000, 0x0400000, STV_MAP_16LE, "mpr17842.9" },
   }
  },
 
@@ -1603,6 +1705,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_6B,
   STV_EC_CHIP_315_5881,
+   0x05226D41,  /* Kronos/MAME key */
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1622,6 +1725,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1644,6 +1748,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1665,6 +1770,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1685,6 +1791,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1704,6 +1811,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1725,6 +1833,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1755,6 +1864,7 @@ static const STVGameInfo STVGI[] =
   SMPC_AREA_JP,
   STV_CONTROL_3B,
   STV_EC_CHIP_NONE,
+   0x00000000,
   STV_ROMTWIDDLE_NONE,
   false,
   {
@@ -1773,7 +1883,8 @@ static const STVGameInfo STVGI[] =
  },
 };
 
-const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s)
+const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
+                                 VirtualFS* vfs, const std::string& dir)
 {
  uint8 tmp[0x80];
  uint32 dr;
@@ -1787,6 +1898,7 @@ const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s)
 
  //printf("%s 0x%08X\n", fname.c_str(), head_crc32);
 
+ /* Pass 1: original behaviour — match against first rom_layout entry */
  for(const STVGameInfo& e : STVGI)
  {
   auto const& rle = e.rom_layout[0];
@@ -1795,6 +1907,34 @@ const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s)
   {
    if(!rle.head_crc32 || head_crc32 == rle.head_crc32)
     return &e;
+  }
+ }
+
+ /* Pass 2: match against any secondary rom_layout entry.
+  * When the ZIP presents a shared ROM first (e.g. mpr20822.13 shared by
+  * twcup98 and twsoc98), we confirm identity by checking whether the
+  * game's identifying first ROM (EPR) exists in the same archive/dir.  */
+ if(vfs)
+ {
+  for(const STVGameInfo& e : STVGI)
+  {
+   const size_t n = sizeof(e.rom_layout) / sizeof(e.rom_layout[0]);
+
+   for(size_t ri = 1; ri < n && e.rom_layout[ri].size; ri++)
+   {
+    if(!MDFN_strazicmp(fname, e.rom_layout[ri].fname))
+    {
+     /* Try to open the identifying first entry (EPR) to disambiguate */
+     const std::string epr_path = vfs->eval_fip(dir, e.rom_layout[0].fname);
+     try
+     {
+      std::unique_ptr<Stream> es(vfs->open(epr_path, VirtualFS::MODE_READ));
+      return &e;   /* EPR exists → this is the right game */
+     }
+     catch(...) {}  /* EPR not present → wrong game, try next */
+     break;
+    }
+   }
   }
  }
 
