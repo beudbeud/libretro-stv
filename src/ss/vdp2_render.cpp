@@ -33,6 +33,10 @@
 
 #include <atomic>
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 namespace MDFN_IEN_SS
 {
 
@@ -2675,8 +2679,44 @@ static int32 ApplyHBlend(uint32* const target, int32 w)
 static void ReorderRGB(uint32* target, const unsigned w, const unsigned Rshift, const unsigned Gshift, const unsigned Bshift)
 {
  assert(!(w & 1));
- uint32* const bound = target + w;
 
+#if defined(__aarch64__)
+ /* Fast path for the fixed XRGB8888 layout used by this core (Rshift=16, Gshift=8, Bshift=0).
+  * Input per pixel : 0x00BBGGRR  (R in byte0, G in byte1, B in byte2)
+  * Output per pixel: 0x00RRGGBB  (R in byte2, G in byte1, B in byte0)
+  *
+  * Strategy (4 pixels per iteration):
+  *   vrev32q_u8  : [R,G,B,0] -> [0,B,G,R]  =  0xRRGGBB00
+  *   vshrq_n_u32 : >> 8       -> 0x00RRGGBB
+  */
+ if(MDFN_LIKELY(Rshift == 16 && Gshift == 8 && Bshift == 0))
+ {
+  uint32* p = target;
+  uint32* const bound4 = target + (w & ~3u);
+
+  while(MDFN_LIKELY(p != bound4))
+  {
+   uint32x4_t v = vld1q_u32(p);
+   v = vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(v)));
+   v = vshrq_n_u32(v, 8);
+   vst1q_u32(p, v);
+   p += 4;
+  }
+
+  /* tail: 0-3 remaining pixels (never reached for ST-V widths 320/352/640/704) */
+  const uint32* const bound = target + w;
+  while(p != bound)
+  {
+   const uint32 tmp = *p;
+   *p = ((uint8)(tmp >> 0) << 16) | ((uint8)(tmp >> 8) << 8) | ((uint8)(tmp >> 16) << 0);
+   p++;
+  }
+  return;
+ }
+#endif /* __aarch64__ */
+
+ /* Generic fallback */
+ uint32* const bound = target + w;
  while(MDFN_LIKELY(target != bound))
  {
   const uint32 tmp0 = target[0];
