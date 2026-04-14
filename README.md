@@ -9,15 +9,13 @@ A libretro core for **Sega ST-V (Sega Titan Video)** arcade hardware, wrapping [
 The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, including games that require the optional protection/encryption chips:
 
 ### 315-5881 encryption chip
-| Game | Key |
+| Game | Status |
 |------|-----|
-| Astra SuperStars | `0x01F8F1CB` |
-| Final Fight Revenge | `0x06040400` |
-| Steep Slope Sliders | `0x02449E09` |
-| Tecmo World Cup '98 | `0x000B18A1` |
-| Touryuu Densetsu Elan Doree | `0x0141C1A9` |
-
-The 315-5881 is a stream cipher based on two 4-round Feistel Networks (identical structure to the CPS-2 cipher). Each game uses a unique 32-bit key; the 16-bit sequence key is written by the game at runtime via the chip's register interface (A-bus CS2, `0x05800000`).
+| Astra SuperStars | `Boot, Imperfect |
+| Final Fight Revenge | `Boot, Imperfect |
+| Steep Slope Sliders | `Unknown |
+| Tecmo World Cup '98 | `No Boot` |
+| Touryuu Densetsu Elan Doree | `Unknown` |
 
 ### 315-5838 compression + encryption chip
 | Game |
@@ -27,7 +25,11 @@ The 315-5881 is a stream cipher based on two 4-round Feistel Networks (identical
 
 The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface.
 
-> **Status**: register address discovery in progress (chip is in A-bus CS2 space, `0x05800000–0x058FFFFF`). Decathlete graphics are currently not decompressed correctly.
+> **Status**: Decathlete graphics are currently not decompressed correctly.
+
+### Batman Forever
+
+> **Status**: No sound, because this game use a extra Qsound card
 
 ---
 
@@ -99,11 +101,6 @@ cmake --build build_lr -j$(nproc)
 make -f libretro/Makefile.libretro TARGET_CROSS=aarch64-buildroot-linux-gnu-
 ```
 
-## TODO
-
-* Add qsound card for Batman Forever
-```
-```
 ## Credits
 
 - **Mednafen Team** — SS/ST-V emulation core
