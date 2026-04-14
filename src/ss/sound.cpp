@@ -25,7 +25,6 @@
 // (May not be worth emulating if it could possibly trigger problems in games)
 
 #include <mednafen/mednafen.h>
-#include <mednafen/resampler/resampler.h>
 #include <mednafen/hw_cpu/m68k/m68k.h>
 #include <mednafen/jump.h>
 
@@ -58,9 +57,7 @@ static MDFN_jmp_buf jbuf;
 
 static int16 IBuffer[1024][2];
 static uint32 IBufferCount;
-static SpeexResamplerState* resampler = NULL;
 static int last_rate;
-static uint32 last_quality;
 
 static INLINE void SCSP_SoundIntChanged(SS_SCSP* s, unsigned level)
 {
@@ -104,7 +101,6 @@ void SOUND_Init(bool stv_mapping)
  IBufferCount = 0;
 
  last_rate = -1;
- last_quality = ~0U;
 
  run_until_time = 0;
  next_scsp_time = 0;
@@ -223,11 +219,6 @@ void SOUND_ResetSCSP(void)
 
 void SOUND_Kill(void)
 {
- if(resampler)
- {
-  speex_resampler_destroy(resampler);  
-  resampler = NULL;
- }
 }
 
 void SOUND_Set68KActive(bool active)
@@ -318,24 +309,8 @@ sscpu_timestamp_t SOUND_Update(sscpu_timestamp_t timestamp)
 
 void SOUND_StartFrame(double rate, uint32 quality)
 {
- if((int)rate != last_rate || quality != last_quality)
- {
-  int err = 0;
-
-  if(resampler)
-  {
-   speex_resampler_destroy(resampler);
-   resampler = NULL;
-  }
-
-  if((int)rate && (int)rate != 44100)
-  {
-   resampler = speex_resampler_init(2, 44100, (int)rate, quality, &err);
-  }
-
-  last_rate = (int)rate;
-  last_quality = quality;
- }
+ (void)quality;
+ last_rate = (int)rate;
 }
 
 int32 SOUND_FlushOutput(int16* SoundBuf, const int32 SoundBufMaxSize, const bool reverse)
@@ -358,39 +333,13 @@ int32 SOUND_FlushOutput(int16* SoundBuf, const int32 SoundBufMaxSize, const bool
   }
  }
  
- if(last_rate == 44100)
- {
-  int32 ret = IBufferCount;
+ int32 ret = IBufferCount;
 
+ if(SoundBuf)
   memcpy(SoundBuf, IBuffer, IBufferCount * 2 * sizeof(int16));
-  IBufferCount = 0;
+ IBufferCount = 0;
 
-  return(ret);
- }
- else if(resampler)
- {
-  spx_uint32_t in_len; // "Number of input samples in the input buffer. Returns the number of samples processed. This is all per-channel."
-  spx_uint32_t out_len; // "Size of the output buffer. Returns the number of samples written. This is all per-channel."
-
-  in_len = IBufferCount;
-  out_len = SoundBufMaxSize;
-
-  speex_resampler_process_interleaved_int(resampler, (const spx_int16_t *)IBuffer, &in_len, (spx_int16_t *)SoundBuf, &out_len);
-
-  assert(in_len <= IBufferCount);
-
-  if((IBufferCount - in_len) > 0)
-   memmove(IBuffer, IBuffer + in_len, (IBufferCount - in_len) * sizeof(int16) * 2);
-
-  IBufferCount -= in_len;
-
-  return(out_len);
- }
- else
- {
-  IBufferCount = 0;
-  return 0;
- }
+ return ret;
 }
 
 void SOUND_StateAction(StateMem* sm, const unsigned load, const bool data_only)

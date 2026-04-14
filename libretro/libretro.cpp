@@ -247,8 +247,6 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend", "Last Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
-    { "mednafen_stv_sound_quality", "Sound Quality", NULL, NULL, NULL, "audio",
-      { {"4","Highest"},{"3","High"},{"2","Medium"},{"1","Low"},{"0","Lowest"},{NULL,NULL} }, "4" },
     { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
       { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_bios_sanity", "BIOS Sanity Checks", NULL, NULL, NULL, "system",
@@ -296,7 +294,6 @@ static void apply_options()
     BOOL_OPT("mednafen_stv_correct_aspect","ss.correct_aspect");
     STR_OPT ("mednafen_stv_slstart",      "ss.slstart");
     STR_OPT ("mednafen_stv_slend",        "ss.slend");
-    STR_OPT ("mednafen_stv_sound_quality","ss.scsp.resamp_quality");
     STR_OPT ("mednafen_stv_cart",         "ss.cart");
     BOOL_OPT("mednafen_stv_bios_sanity",  "ss.bios_sanity");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
@@ -321,7 +318,6 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
     if(!cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &s_opts_v2)) {
         static const retro_variable legacy[] = {
             {"mednafen_stv_region","Region; jp|na|eu|auto"},
-            {"mednafen_stv_sound_quality","Sound Quality; 4|3|2|1|0"},
             {NULL,NULL}
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)legacy);
