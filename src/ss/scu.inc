@@ -1103,16 +1103,6 @@ static INLINE void ABusRW_DB(uint32 A, uint16* DB, int32* time_thing, int32* dma
     *time_thing += 8;
   }
 
-  /* Log EVERY CS2 access unconditionally to /tmp/cs2_raw.log */
-  {
-   static FILE* cs2_raw = nullptr;
-   if(!cs2_raw) cs2_raw = fopen("/tmp/cs2_raw.log","w");
-   if(cs2_raw) {
-    fprintf(cs2_raw, "%s @%08x DB=%04x\n", IsWrite?"W":"R", A, (unsigned)*DB);
-    fflush(cs2_raw);
-   }
-  }
-
   if((A & 0x7FFF) < 0x1000)
   {
    const uint32 offset = (A & 0x3F) >> 2;
