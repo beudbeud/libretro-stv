@@ -1217,7 +1217,12 @@ MDFN_FASTCALL void Write_CheckDrawSlowdown(uint32 A, sscpu_timestamp_t time_thin
 {
  if(DrawingActive && time_thing > LastRWTS && (ss_horrible_hacks & HORRIBLEHACK_VDP1RWDRAWSLOWDOWN))
  {
-  const int32 count = (A & 0x100000) ? 22 : 25;
+  // Hardware doc (VDP1 §2.1): SH-2 CPU access to VRAM during drawing causes
+  // ~10 or more SH-2-clock wait states.  Previous values (22/25) were 2-2.5×
+  // too high; now calibrated to ~10 cycles + ~40% margin for the SH-2
+  // running slightly faster than real hardware (no cache/pipeline/refresh).
+  // Burst writes are naturally capped by the inter-access interval via min().
+  const int32 count = (A & 0x100000) ? 12 : 14;
   const uint32 a = std::min<uint32>(count, time_thing - LastRWTS);
 
   CycleCounter -= a;
@@ -1230,7 +1235,10 @@ MDFN_FASTCALL void Read_CheckDrawSlowdown(uint32 A, sscpu_timestamp_t time_thing
  //printf("%08x\n", A);
  if(!(A & 0x100000) && time_thing > LastRWTS && DrawingActive && (ss_horrible_hacks & HORRIBLEHACK_VDP1RWDRAWSLOWDOWN))
  {
-  const int32 count = (A & 0x80000) ? 44 : 41;
+  // Read accesses are sparser than writes so the min() cap triggers less
+  // often — previous values of 41/44 were ~4× the documented ~10-cycle wait
+  // and caused excessive VDP1 time theft on isolated VRAM reads.
+  const int32 count = (A & 0x80000) ? 18 : 16;
   const uint32 a = std::min<uint32>(count, time_thing - LastRWTS);
 
   CycleCounter -= a;
