@@ -1677,7 +1677,7 @@ static MDFN_COLD void Load(GameFile* gf)
 
    MDFNGameInfo->name = sgi->name;
 
-   InitCommon(CPUCACHE_EMUMODE_FULL, HORRIBLEHACK_VDP1RWDRAWSLOWDOWN, CART_STV, region, nullptr, gf, sgi);
+   InitCommon(CPUCACHE_EMUMODE_FULL, DB_GetSTVHacks(sgi), CART_STV, region, nullptr, gf, sgi);
 
    if(sgi->rotate)
     MDFNGameInfo->rotated = MDFN_ROTATE90;

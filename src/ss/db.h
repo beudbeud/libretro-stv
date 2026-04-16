@@ -102,6 +102,11 @@ struct STVGameInfo
 const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
                                  VirtualFS* vfs = nullptr, const std::string& dir = "");
 
+/* Returns the horrible-hacks bitmask appropriate for a given STV game.
+ * Applies HORRIBLEHACK_VDP1RWDRAWSLOWDOWN to action/shooter/fighter titles
+ * and omits it for puzzle/board/quiz/fishing games that don't need it. */
+uint32 DB_GetSTVHacks(const STVGameInfo* sgi);
+
 void DB_GetInternalDB(std::vector<GameDB_Database>* databases) MDFN_COLD;
 std::string DB_GetHHDescriptions(const uint32 hhv) MDFN_COLD;
 
