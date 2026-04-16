@@ -44,10 +44,15 @@ struct TreeEntry5838
 /* ── Compression state (uploaded per block by CPU) ──────────────────────── */
 struct Chip5838CompState
 {
- TreeEntry5838 tree[12];
+ /* 12 real entries + 1 zero sentinel.
+  * When i==11 in the Huffman search, tree[12] is accessed as upper-bound
+  * guard.  With sentinel.pattern=0 the check (val >= 0) always fires,
+  * meaning entry 11 only matches when num_bits==12 (upper-bound check
+  * skipped).  This matches MAME's sega_315_5838_comp_device tree[13]. */
+ TreeEntry5838 tree[13];
  uint8_t       dictionary[256];
- uint8_t       mode;   /* upload mode: 0x00/0x80 = tree; 0x80/0x08 = dict */
- uint16_t      id;     /* dictionary write index (uint16 to avoid overflow past 255) */
+ uint16_t      mode;   /* upload mode: full 16-bit value; bit 7 selects tree(0)/dict(1) */
+ uint16_t      id;     /* dictionary write index */
  uint8_t       it2;    /* tree write index (half-entries: 2 per tree entry) */
 };
 
@@ -220,10 +225,12 @@ struct Chip5838
   num_bits            = 0;
  }
 
- /* Set table upload mode (tree=0x00/0x8000, dictionary=0x80/0x0080) */
+ /* Set table upload mode.
+  * Stores full 16-bit value (matching MAME); only bit 7 is used for the
+  * tree(0) / dictionary(1) selection.  Resets the appropriate write index. */
  void set_table_upload_mode_w(uint16_t v)
  {
-  cs[active_bank].mode = (uint8_t)(v & 0x80);
+  cs[active_bank].mode = v;
   if(!(cs[active_bank].mode & 0x80))
    cs[active_bank].it2 = 0;
   else
@@ -235,7 +242,8 @@ struct Chip5838
  {
   if(!(cs[active_bank].mode & 0x80))
   {
-   /* Tree upload: alternating (len/idx) and (pattern) entries */
+   /* Tree upload: alternating (len/idx) and (pattern) entries.
+    * Writes to entries 0-11 only; entry 12 is the zero sentinel. */
    if(cs[active_bank].it2 / 2 >= 12) return;
    if((cs[active_bank].it2 & 1) == 0)
    {
@@ -250,8 +258,9 @@ struct Chip5838
   }
   else
   {
-   /* Dictionary upload: two bytes per write */
-   if(cs[active_bank].id >= 256) return;  /* dictionary is exactly 256 bytes */
+   /* Dictionary upload: two bytes per 16-bit write.
+    * Guard: id must be ≤ 254 so both bytes (id, id+1) fit in [0..255]. */
+   if(cs[active_bank].id >= 255) return;
    cs[active_bank].dictionary[cs[active_bank].id++] = (v & 0xFF00) >> 8;
    cs[active_bank].dictionary[cs[active_bank].id++] = (v & 0x00FF);
   }
