@@ -1686,6 +1686,11 @@ static INLINE void UpdateDMAInner(DMALevelS* d)
    }
 
    d->FinishTime = SCU_DMA_TimeCounter;
+   if(d->SF == 0x7)
+   {
+    const int32 base = (d->WriteBus == 1) ? 1 : 33;
+    d->FinishTime += base + (int32)std::min<uint32>(d->StartByteCount >> 4, 32);
+   }
    d->Active = -1;
   }
  }

@@ -242,12 +242,14 @@ struct Chip5881
   done_compression = 0;
   buffer_pos       = BUFFER_SIZE;
 
+  /* Reset history before each block so previous runs don't bleed in.
+   * Kronos notes this is required by Astra SuperStars at minimum. */
+  dec_hist = 0;
+
   if(buffer_bit2 < 14)
    dec_header = (uint32_t)(buffer2a & 0x0003) << 16;
-  else {
-   dec_hist   = 0;
+  else
    dec_header = (uint32_t)get_decrypted_16() << 16;
-  }
   dec_header |= get_decrypted_16();
 
   block_numlines = ((dec_header & 0x000000ff) >> 0) + 1;
