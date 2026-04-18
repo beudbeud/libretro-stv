@@ -26,6 +26,7 @@
 #include <mednafen/general.h>
 #include <mednafen/FileStream.h>
 #include <mednafen/compress/GZFileStream.h>
+#include <mednafen/compress/ZIPReader.h>
 #include <mednafen/mempatcher.h>
 #include <mednafen/hash/sha256.h>
 #include <mednafen/hash/md5.h>
@@ -1435,13 +1436,42 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
  }
 
  {
-  const std::string biospath = MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, MDFN_GetSettingS(biospath_sname));
-  FileStream BIOSFile(biospath, FileStream::MODE_READ);
+  const std::string bios_fn  = MDFN_GetSettingS(biospath_sname);
+  const std::string biospath = MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, bios_fn);
 
-  if(BIOSFile.size() != 524288)
-   throw MDFN_Error(0, _("BIOS file \"%s\" is of an incorrect size."), MDFN_strhumesc(biospath).c_str());
+  /* Try individual BIOS file first; on failure fall back to stvbios.zip
+   * in the same firmware directory (allows shipping a single archive). */
+  bool bios_loaded = false;
+  try
+  {
+   FileStream BIOSFile(biospath, FileStream::MODE_READ);
+   if(BIOSFile.size() != 524288)
+    throw MDFN_Error(0, _("BIOS file \"%s\" is of an incorrect size."), MDFN_strhumesc(biospath).c_str());
+   BIOSFile.read(BIOSROM, 512 * 1024);
+   bios_loaded = true;
+  }
+  catch(std::exception&) { /* fall through to zip */ }
 
-  BIOSFile.read(BIOSROM, 512 * 1024);
+  if(!bios_loaded)
+  {
+   const std::string zippath = MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, "stvbios.zip");
+   try
+   {
+    ZIPReader zr(std::unique_ptr<Stream>(new FileStream(zippath, FileStream::MODE_READ)));
+    const size_t idx = zr.find_by_path(bios_fn);
+    if(zr.get_file_size(idx) != 524288)
+     throw MDFN_Error(0, _("BIOS \"%s\" in \"stvbios.zip\" has incorrect size."), bios_fn.c_str());
+    std::unique_ptr<Stream> s(zr.open(idx));
+    s->read(BIOSROM, 512 * 1024);
+    MDFN_printf(_("[SS] BIOS \"%s\" loaded from stvbios.zip\n"), bios_fn.c_str());
+   }
+   catch(std::exception& ze)
+   {
+    throw MDFN_Error(0, _("BIOS file \"%s\" not found and stvbios.zip fallback failed: %s"),
+                     bios_fn.c_str(), ze.what());
+   }
+  }
+
   BIOS_SHA256 = sha256(BIOSROM, 512 * 1024);
 
   if(MDFN_GetSettingB("ss.bios_sanity"))
