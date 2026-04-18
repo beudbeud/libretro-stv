@@ -1609,6 +1609,15 @@ static std::string FDIDToString(const uint8 (&fd_id)[16])
 
 uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
 {
+ /* Games whose sprite rendering suffers from VDP1 time-sliced drawing being
+  * aborted mid-frame by the framebuffer swap. HORRIBLEHACK_VDP1INSTANT makes
+  * the command list execute atomically at the start of each frame, so
+  * partially-drawn sprites cannot leak into the displayed buffer. */
+ static const char* const vdp1_instant_draw[] =
+ {
+  "Astra SuperStars",  /* 315-5881: stripes caused by time-sliced drawing vs FB swap timing */
+ };
+
  /* Puzzle, board, quiz, card, fishing, golf, and other low-sprite-throughput
   * games do not trigger the VDP1 bus-contention issue that
   * HORRIBLEHACK_VDP1RWDRAWSLOWDOWN compensates for.  Every other title
@@ -1616,6 +1625,7 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   * hack so that VDP1 rendering stays in sync with the real hardware cadence. */
  static const char* const no_vdp1_slowdown[] =
  {
+  "Astra SuperStars",  /* 315-5881: dense VRAM writes from ROM texture transfers exhaust VDP1 CycleCounter */
   "Baku Baku Animal",
   "Columns '97",
   "Critter Crusher",
@@ -1648,11 +1658,23 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   "Virtual Mahjong 2: My Fair Lady",
  };
 
+ uint32 hacks = HORRIBLEHACK_VDP1RWDRAWSLOWDOWN;
+
  for(const char* name : no_vdp1_slowdown)
   if(!strcmp(sgi->name, name))
-   return 0;
+  {
+   hacks = 0;
+   break;
+  }
 
- return HORRIBLEHACK_VDP1RWDRAWSLOWDOWN;
+ for(const char* name : vdp1_instant_draw)
+  if(!strcmp(sgi->name, name))
+  {
+   hacks |= HORRIBLEHACK_VDP1INSTANT;
+   break;
+  }
+
+ return hacks;
 }
 
 std::string DB_GetHHDescriptions(const uint32 hhv)

@@ -86,7 +86,11 @@ static MDFN_HOT void ROM_Read(uint32 A, uint16* DB)
    }
    else
    {
-    *DB = 0xFFFF;
+    /* MAME common_prot_r returns m_a_bus[offset] (last-written word).
+     * Returning 0xFFFF was wrong — the game may read back registers to
+     * verify chip state, causing re-init with garbage parameters. */
+    const uint32 word_idx = (A - 0x04FFFFF0) >> 1;
+    *DB = chip5881.a_bus[word_idx & 7];
    }
   }
   else
@@ -188,6 +192,9 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
     const bool hi = !((A >> 1) & 1);
     if(hi) { val32 = (uint32)*DB << 16; mask32 = 0xFFFF0000; }
     else   { val32 = *DB;               mask32 = 0x0000FFFF; }
+    /* Mirror into a_bus (word granularity, matches MAME m_a_bus) */
+    const uint32 word_idx = (A - 0x04FFFFF0) >> 1;
+    chip5881.a_bus[word_idx & 7] = *DB;
    }
    else  /* sizeof(T) == 1: byte write */
    {
@@ -196,6 +203,12 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
     const uint32 shift = (3 - (A & 3)) * 8;  /* BE bit position */
     val32  = (uint32)bval << shift;
     mask32 = 0xFFU << shift;
+    /* Mirror byte into a_bus word — update the relevant byte in the 16-bit slot */
+    const uint32 word_idx = (A - 0x04FFFFF0) >> 1;
+    const uint32 byte_in_word = (A & 1) ^ 1;  /* BE: addr&1=0 → high byte, addr&1=1 → low byte */
+    chip5881.a_bus[word_idx & 7] =
+     (chip5881.a_bus[word_idx & 7] & ~(0xFF << (byte_in_word * 8))) |
+     ((uint16_t)bval << (byte_in_word * 8));
    }
 
    if(dw_off == 0)  /* protenable */
@@ -291,6 +304,7 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFPTR8N(chip5881.buffer, BUFFER_SIZE, "chip5881_buf"),
   SFPTR8N(chip5881.line_buffer, LINE_SIZE, "chip5881_lb"),
   SFPTR8N(chip5881.line_buffer_prev, LINE_SIZE, "chip5881_lbp"),
+  SFPTR16N(chip5881.a_bus, 8, "chip5881_abus"),
 
   SFEND
  };
@@ -329,18 +343,15 @@ static void Kill(void)
 
 static MDFN_HOT void CS2_Read_diag(uint32 A, uint16* DB)
 {
+ /* 315-5838 (Decathlete) uses CS2 for the BIOS protection check.
+  * 315-5881 is CS01-only in MAME — any CS2 access here would wrongly
+  * consume stream words and corrupt the decompressed sprite data. */
  if(ECChip == STV_EC_CHIP_315_5838) {
   if(!chip5838.active) {
    *DB = 0x0000;
   } else {
-   /* CS2 path = raw decipher mode (no Huffman).
-    * MAME's init_decathlt only maps the 5838 chip over CS01 (0x2000000-0x37FFFFF).
-    * The CS2 protection check at srcoffset=0x0be1 expects decipher(ROM_word)
-    * returned directly — for that word: decipher(0x1533) = 0x16be.            */
    *DB = chip5838.data_r_raw();
   }
- } else if(ECChip == STV_EC_CHIP_315_5881) {
-  *DB = chip5881.decrypt_le_r();
  } else {
   *DB = 0xFFFF;
  }
@@ -355,6 +366,9 @@ static MDFN_HOT void CS2_Write16_diag(uint32 A, uint16* DB)
 {
  const uint32 off = A & 0x3E;
 
+ /* Same rationale as CS2_Read_diag: 315-5881 is CS01-only.  Routing
+  * CS2 writes to set_addr_low/hi/subkey could corrupt chip state
+  * mid-decompression on unrelated CS2 accesses. */
  if(ECChip == STV_EC_CHIP_315_5838) {
   if(off == 0x08 || off == 0x0a) {
    chip5838.srcaddr_w16(*DB);
@@ -365,10 +379,6 @@ static MDFN_HOT void CS2_Write16_diag(uint32 A, uint16* DB)
    chip5838.active_bank = 0;
    chip5838.upload_table_data_w(*DB);
   }
- } else if(ECChip == STV_EC_CHIP_315_5881) {
-  if(off == 0x08)       chip5881.set_addr_low(*DB);
-  else if(off == 0x0a)  chip5881.set_addr_high(*DB);
-  else if(off == 0x0c)  chip5881.set_subkey(*DB);
  }
 }
 
@@ -526,7 +536,7 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
    chip5838.reset();
    chip5838.rom            = ROM + MPR_WORD_OFFSET;  /* bank 0 default (MPR0, CS2 BIOS check) */
    chip5838.rom_base       = ROM + MPR_WORD_OFFSET;  /* invariant MPR0 base for CS2           */
-   chip5838.rom_phys       = ROM;                    /* ROM byte-0 base for CS01 physical map */
+   chip5838.rom_phys       = ROM + MPR_WORD_OFFSET;  /* CS01 bank 0 = mpr18968.2 (byte 0x400000) */
    chip5838.rom_size_words = (0x3000000 / sizeof(uint16)) - MPR_WORD_OFFSET;
    chip5838.pending_srcaddr_hi = 0;
    MDFN_printf(_("[CART-STV] 315-5838 decipher chip enabled (Decathlete)\n"));

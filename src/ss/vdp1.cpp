@@ -35,8 +35,9 @@
 
 // TODO: Test 1x1 line, polyline, sprite, and polygon.
 
-// TODO: Framebuffer swap/auto drawing start happens a bit too early, should happen near
-//       end of hblank instead of the beginning.
+// Framebuffer swap/auto drawing start fires on HBlank rising edge (start of HBlank).
+// EraseParams (derived from EWLR/EWRR) are updated live on every CPU register write so
+// that erase bounds are always current when the incremental per-line erase runs.
 
 #include "ss.h"
 #include <mednafen/mednafen.h>
@@ -922,14 +923,12 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
   {
    InstantDrawSanityLimit = 1000000;
 
-   // Run vblank erase at end of vblank all at once(not strictly accurate, but should only have visible side effects wrt the debugger and reset).
+   // Run vblank erase at end of vblank all at once.
+   // Always complete the full erase area — the cycle-count limit caused incomplete
+   // erases on sprite-heavy games (e.g. Astra SuperStars), leaving old sprite pixels
+   // in the draw buffer that appeared as ghost sprites on the next displayed frame.
    if(FBVBEraseActive)
    {
-    int32 count = event_timestamp - FBVBEraseLastTS;
-    //printf("%d %d, %d\n", event_timestamp, FBVBEraseLastTS, count);
-    //
-    //
-    //
     uint32 y = EraseParams.y_start;
 
     do
@@ -941,27 +940,16 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
      if(EraseParams.rot8)
       fbyptr += (y & 0x100);
 
-     count -= 8;
      do
      {
       for(unsigned sub = 0; sub < 8; sub++)
       {
-       //printf("%d %d:%d %04x\n", FBDrawWhich, x, y, fill_data);
-       //printf("%lld\n", &fbyptr[x & fb_x_mask] - FB[!FBDrawWhich]);
        fbyptr[x & EraseParams.fb_x_mask] = EraseParams.fill_data;
        x++;
-      }
-      count -= 8;
-      if(MDFN_UNLIKELY(count <= 0))
-      {
-       SS_DBGTI(SS_DBG_WARNING | SS_DBG_VDP1, "[VDP1] VB erase of framebuffer %d ran out of time.", !FBDrawWhich);
-       goto AbortVBErase;
       }
      } while(x < EraseParams.x_bound);
     } while(++y <= EraseParams.y_end);
 
-    AbortVBErase:;
-    //
     FBVBEraseActive = false;
    }
    //
@@ -1003,6 +991,31 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
 
     EraseParams.fill_data = EWDR;
     //
+
+    /* VDP1INSTANT: force-erase the (freshly swapped) draw buffer before drawing.
+     * The incremental EraseYCounter erase (one row per GetLine call) may not
+     * finish all rows in one frame, leaving stale sprite pixels that cause
+     * stripes when sprites translate.  The FBVBEraseActive path (TVMR_VBE /
+     * rotation mode) already ran pre-swap above and covered the same buffer,
+     * so we only need this for games that do not set those bits. */
+    if((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
+       && EraseParams.x_bound > EraseParams.x_start
+       && EraseParams.y_start <= EraseParams.y_end)
+    {
+     uint32 fy = EraseParams.y_start;
+     do
+     {
+      uint16* fbyptr = &FB[FBDrawWhich][(fy & 0xFF) << 9];
+      if(EraseParams.rot8)
+       fbyptr += (fy & 0x100);
+      uint32 fx = EraseParams.x_start;
+      do
+      {
+       for(unsigned sub = 0; sub < 8; sub++, fx++)
+        fbyptr[fx & EraseParams.fb_x_mask] = EraseParams.fill_data;
+      } while(fx < EraseParams.x_bound);
+     } while(++fy <= EraseParams.y_end);
+    }
 
     if(PTMR & 0x2)	// Start drawing(but only if we swapped the frame)
     {
@@ -1140,6 +1153,8 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 
   case 0x0:	// TVMR
 	TVMR = value & 0xF;
+	EraseParams.rot8 = (TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE);
+	EraseParams.fb_x_mask = EraseParams.rot8 ? 0xFF : 0x1FF;
 	break;
 
   case 0x1:	// FBCR
@@ -1151,6 +1166,40 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	PTMR = (value & 0x3);
 	if(value & 0x1)
 	{
+	 /* Per spec: PTMR=01B starts drawing immediately, unconditionally.
+	  * With VDP1INSTANT, each manual restart must get a fresh budget so that
+	  * mid-frame command-list updates (typical in fighters after CPU prepares
+	  * new sprite data) draw completely instead of aborting mid-list. */
+	 if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT))
+	 {
+	  InstantDrawSanityLimit = 1000000;
+	  /* Erase the draw buffer before the manual pass so that stale pixels from
+	   * the preceding auto vblank-out pass do not bleed through when sprites have
+	   * moved.  On real hardware the auto pass is interrupted before completion by
+	   * this PTMR write, leaving very few stale pixels; with VDP1INSTANT the auto
+	   * pass always completes, so we must wipe the buffer ourselves.
+	   * Guard against degenerate EraseParams (x_bound==0 or empty y range). */
+	  if(EraseParams.x_bound > EraseParams.x_start && EraseParams.y_start <= EraseParams.y_end)
+	  {
+	   uint32 ey = EraseParams.y_start;
+	   do
+	   {
+	    uint16* fbyptr;
+	    uint32 ex = EraseParams.x_start;
+	    fbyptr = &FB[FBDrawWhich][(ey & 0xFF) << 9];
+	    if(EraseParams.rot8)
+	     fbyptr += (ey & 0x100);
+	    do
+	    {
+	     for(unsigned sub = 0; sub < 8; sub++)
+	     {
+	      fbyptr[ex & EraseParams.fb_x_mask] = EraseParams.fill_data;
+	      ex++;
+	     }
+	    } while(ex < EraseParams.x_bound);
+	   } while(++ey <= EraseParams.y_end);
+	  }
+	 }
 	 StartDrawing();
 	 nt = SH7095_mem_timestamp + 1;
 	}
@@ -1158,14 +1207,19 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 
   case 0x3:	// EWDR
 	EWDR = value;
+	EraseParams.fill_data = EWDR;
 	break;
 
   case 0x4:	// EWLR
 	EWLR = value & 0x7FFF;
+	EraseParams.y_start = EWLR & 0x1FF;
+	EraseParams.x_start = ((EWLR >> 9) & 0x3F) << 3;
 	break;
 
   case 0x5:	// EWRR
 	EWRR = value;
+	EraseParams.y_end = EWRR & 0x1FF;
+	EraseParams.x_bound = ((EWRR >> 9) & 0x7F) << 3;
 	break;
 
   case 0x6:	// ENDR
@@ -1217,11 +1271,9 @@ MDFN_FASTCALL void Write_CheckDrawSlowdown(uint32 A, sscpu_timestamp_t time_thin
 {
  if(DrawingActive && time_thing > LastRWTS && (ss_horrible_hacks & HORRIBLEHACK_VDP1RWDRAWSLOWDOWN))
  {
-  // Hardware doc (VDP1 §2.1): SH-2 CPU access to VRAM during drawing causes
-  // ~10 or more SH-2-clock wait states.  Previous values (22/25) were 2-2.5×
-  // too high; now calibrated to ~10 cycles + ~40% margin for the SH-2
-  // running slightly faster than real hardware (no cache/pipeline/refresh).
-  // Burst writes are naturally capped by the inter-access interval via min().
+  // Hardware doc (VDP1 §2.1): ~10 or more SH-2 wait states on VRAM access.
+  // Calibrated to ~10 cycles + margin; burst writes capped by inter-access
+  // interval via min(), so this constant only matters for isolated accesses.
   const int32 count = (A & 0x100000) ? 12 : 14;
   const uint32 a = std::min<uint32>(count, time_thing - LastRWTS);
 
@@ -1236,7 +1288,7 @@ MDFN_FASTCALL void Read_CheckDrawSlowdown(uint32 A, sscpu_timestamp_t time_thing
  if(!(A & 0x100000) && time_thing > LastRWTS && DrawingActive && (ss_horrible_hacks & HORRIBLEHACK_VDP1RWDRAWSLOWDOWN))
  {
   // Read accesses are sparser than writes so the min() cap triggers less
-  // often — previous values of 41/44 were ~4× the documented ~10-cycle wait
+  // often; previous values of 41/44 were ~4× the documented ~10-cycle wait
   // and caused excessive VDP1 time theft on isolated VRAM reads.
   const int32 count = (A & 0x80000) ? 18 : 16;
   const uint32 a = std::min<uint32>(count, time_thing - LastRWTS);

@@ -53,7 +53,10 @@ struct sbox5881 {
  *  0xxxxxxx → next node index
  *  1a0bbccc → end node (a=fetch/repeat, bb=offset, ccc+1=count)
  *  11111111 → empty (padding)                                               */
-static constexpr int BUFFER_SIZE = 32;
+/* MAME uses BUFFER_SIZE=2 (stream-like, one word at a time).
+ * A larger buffer can mix data from two consecutive blocks when block_size < BUFFER_SIZE,
+ * because enc_start() resets block_pos mid-loop without stopping the fill.    */
+static constexpr int BUFFER_SIZE = 2;
 static constexpr int LINE_SIZE   = 512;
 static constexpr uint32_t FLAG_COMPRESSED = 0x20000;
 static constexpr int FN1GK = 38;
@@ -79,6 +82,7 @@ struct Chip5881
  uint16_t subkey;
  uint32_t game_key;
  uint32_t protenable;  /* bit 0x00010000 = chip enabled (MAME m_abus_protenable) */
+ uint16_t a_bus[8];    /* mirror of last-written words at offsets 0x04FFFFF0-FE (MAME m_a_bus) */
 
  bool     enc_ready;
 
@@ -107,6 +111,7 @@ struct Chip5881
   memset(buffer,           0, sizeof(buffer));
   memset(line_buffer,      0, sizeof(line_buffer));
   memset(line_buffer_prev, 0, sizeof(line_buffer_prev));
+  memset(a_bus, 0, sizeof(a_bus));
   prot_cur_address  = 0;
   subkey            = 0;
   protenable        = 0;
@@ -242,14 +247,23 @@ struct Chip5881
   done_compression = 0;
   buffer_pos       = BUFFER_SIZE;
 
-  /* Reset history before each block so previous runs don't bleed in.
-   * Kronos notes this is required by Astra SuperStars at minimum. */
-  dec_hist = 0;
-
   if(buffer_bit2 < 14)
+  {
+   /* Reusing leftover bits from the current decompression word — do NOT
+    * reset dec_hist: the history from the previous get_decrypted_16() call
+    * must be preserved for the lower-word read that follows. */
    dec_header = (uint32_t)(buffer2a & 0x0003) << 16;
+  }
   else
+  {
+   /* Starting a fresh stream: reset history so the previous block cannot
+    * bleed into this one.  MAME resets only here (not unconditionally).
+    * Required by Astra SuperStars (MAME comment: "seems to be needed by
+    * astrass at least otherwise any call after the first one will be
+    * influenced by the one before it"). */
+   dec_hist = 0;
    dec_header = (uint32_t)get_decrypted_16() << 16;
+  }
   dec_header |= get_decrypted_16();
 
   block_numlines = ((dec_header & 0x000000ff) >> 0) + 1;
@@ -302,15 +316,14 @@ struct Chip5881
  void line_fill()
  {
   assert(line_buffer_pos == line_buffer_size);
-  std::swap(line_buffer, line_buffer_prev);  /* swap pointers — use memcpy instead */
-  /* Actually do a buffer swap manually since these are arrays */
-  /* This is handled by the swap above but we need to copy prev→cur first */
 
-  uint8_t tmp_buf[LINE_SIZE];
-  memcpy(tmp_buf,          line_buffer,      LINE_SIZE);
-  memcpy(line_buffer,      line_buffer_prev, LINE_SIZE);
-  memcpy(line_buffer_prev, tmp_buf,          LINE_SIZE);
-
+  /* lp = current line (source for copy-from-prev-line operations).
+   * lc = scratch target for the new line being built.
+   * After filling lc, swap the arrays so line_buffer holds the new data
+   * and line_buffer_prev holds the old data for the next fill.
+   *
+   * MAME uses unique_ptr::swap() to swap pointer ownership; here we use
+   * plain arrays, so we fill into line_buffer_prev then memcpy-swap. */
   uint8_t *lp = line_buffer;
   uint8_t *lc = line_buffer_prev;
   line_buffer_pos = 0;
@@ -339,6 +352,16 @@ struct Chip5881
     }
    }
   }
+  /* Swap arrays so line_buffer contains the newly filled data.
+   * lc (= old line_buffer_prev) holds the new line; copy it into
+   * line_buffer and save the old line into line_buffer_prev. */
+  {
+   uint8_t tmp_buf[LINE_SIZE];
+   memcpy(tmp_buf,          line_buffer,      LINE_SIZE);
+   memcpy(line_buffer,      line_buffer_prev, LINE_SIZE);
+   memcpy(line_buffer_prev, tmp_buf,          LINE_SIZE);
+  }
+
   block_pos++;
   if(block_numlines == block_pos)
    done_compression = 1;

@@ -256,10 +256,6 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_autortc_lang", "BIOS Language", NULL, NULL, NULL, "system",
       { {"english","English"},{"japanese","Japanese"},{"french","French"},
         {"german","German"},{"spanish","Spanish"},{"italian","Italian"},{NULL,NULL} }, "english" },
-    { "mednafen_stv_multitap1", "Multitap Port 1", NULL, NULL, NULL, "input",
-      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_multitap2", "Multitap Port 2", NULL, NULL, NULL, "input",
-      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
 static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
@@ -298,9 +294,6 @@ static void apply_options()
     BOOL_OPT("mednafen_stv_bios_sanity",  "ss.bios_sanity");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
     STR_OPT ("mednafen_stv_autortc_lang", "ss.smpc.autortc.lang");
-    BOOL_OPT("mednafen_stv_multitap1",    "ss.input.sport1.multitap");
-    BOOL_OPT("mednafen_stv_multitap2",    "ss.input.sport2.multitap");
-
 #undef BOOL_OPT
 #undef STR_OPT
 
