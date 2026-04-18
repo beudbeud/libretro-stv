@@ -257,11 +257,8 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"english","English"},{"japanese","Japanese"},{"french","French"},
         {"german","German"},{"spanish","Spanish"},{"italian","Italian"},{NULL,NULL} }, "english" },
     { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
-      "data_cb: fast (no instruction cache). full: accurate but slow. Restart required.", NULL, "performance",
-      { {"data_cb","Fast (data only)"},{"data","Data (full)"},{"full","Full (accurate)"},{NULL,NULL} }, "data_cb" },
-    { "mednafen_stv_vdp2_thread", "VDP2 Rendering Thread", NULL,
-      "Offload VDP2 background rendering to a dedicated CPU core. Requires restart.", NULL, "performance",
-      { {"disabled","Disabled"},{"enabled","Enabled (core 3)"},{NULL,NULL} }, "disabled" },
+      "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
+      { {"data_cb","Fast (recommended)"},{"data","Data cache only"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
 static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
@@ -301,9 +298,6 @@ static void apply_options()
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
     STR_OPT ("mednafen_stv_autortc_lang", "ss.smpc.autortc.lang");
     STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
-    var.key = "mednafen_stv_vdp2_thread";
-    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-        MDFNI_SetSetting("ss.affinity.vdp2", strcmp(var.value, "enabled") == 0 ? "8" : "0");
 #undef BOOL_OPT
 #undef STR_OPT
 
@@ -501,6 +495,13 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
     }
 
+    /* Signal display rotation. tate_mode=enabled → game_info->rotated=MDFN_ROTATE90 → rotation 1.
+     * tate_mode=disabled (default) → rotation 0, overriding any frontend auto-detect. */
+    {
+        unsigned rot = (game_info->rotated != 0) ? 1u : 0u;
+        environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rot);
+    }
+
     return true;
 }
 
@@ -523,9 +524,15 @@ RETRO_API void retro_run(void)
         apply_options();
         /* Also update geometry on option change (like Beetle PCE Fast) */
         if(g_last_w > 0) {
+            bool is_tate = game_info && (game_info->rotated != 0);
             retro_game_geometry geo={};
-            geo.base_width=g_last_w; geo.base_height=g_last_h;
-            geo.max_width=FB_W;      geo.max_height=g_last_h;
+            if(is_tate) {
+                geo.base_width=g_last_h; geo.base_height=g_last_w;
+                geo.max_width=FB_H;      geo.max_height=g_last_w;
+            } else {
+                geo.base_width=g_last_w; geo.base_height=g_last_h;
+                geo.max_width=FB_W;      geo.max_height=g_last_h;
+            }
             geo.aspect_ratio = 4.f/3.f;
             environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
         }
@@ -571,6 +578,8 @@ RETRO_API void retro_run(void)
         if(mx > 0) dw = mx;
     }
     if(dw<=0) dw=320; if(dh<=0) dh=240;
+    /* Clamp garbage transition frames (e.g. 4x224 during VDP2 mode switch). */
+    if(dw < 64) dw = (g_last_w >= 64) ? g_last_w : 320;
 
     /* Interlaced: DisplayRect.h = full frame (e.g. 480). For geometry/SwitchRes
      * we report the field height (240) — the actual scanline count on the CRT.
@@ -580,11 +589,19 @@ RETRO_API void retro_run(void)
     /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
     if(dw != g_last_w || display_h != g_last_h) {
         g_last_w = dw; g_last_h = display_h;
+        bool is_tate = game_info && (game_info->rotated != 0);
         retro_game_geometry geo={};
-        geo.base_width   = dw;
-        geo.base_height  = display_h;
-        geo.max_width    = FB_W;
-        geo.max_height   = display_h;  /* = base_height for correct SwitchRes fractal Y */
+        if(is_tate) {
+            geo.base_width   = display_h;
+            geo.base_height  = dw;
+            geo.max_width    = FB_H;
+            geo.max_height   = dw;
+        } else {
+            geo.base_width   = dw;
+            geo.base_height  = display_h;
+            geo.max_width    = FB_W;
+            geo.max_height   = display_h;
+        }
         geo.aspect_ratio = 4.f / 3.f;
         environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
     }

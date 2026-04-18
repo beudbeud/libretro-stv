@@ -35,6 +35,8 @@ The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with 
 
 ## BIOS files
 
+Individual files in the RetroArch system directory, **or** a single `stvbios.zip` containing them (TORRENTZIPPED format supported):
+
 | File | Region | SHA-256 |
 |------|--------|---------|
 | `epr-20091.ic8` | Japan | `ac778ec04aaa4df296d30743536da3de31281f8ae5c94d7be433dcc84e25d85b` |
@@ -78,8 +80,11 @@ Coin insertion uses `MDFN_QSimpleCommand(MDFN_MSC_INSERT_COIN)` with edge detect
 | `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0–239) |
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (0–239) |
 | `mednafen_stv_sound_quality` | `4` | SCSP resampler quality (0=lowest, 4=highest) |
+| `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: Fast (recommended) / Data cache only / Full (accurate, slow) |
 | `mednafen_stv_bios_sanity` | `enabled` | Verify BIOS SHA-256 checksums at load |
 | `mednafen_stv_autortc` | `enabled` | Auto-set Real Time Clock from host |
+
+Tate (vertical cabinet) games are detected automatically from the game database and reported to the frontend via `SET_ROTATION` — no manual option required.
 
 ---
 

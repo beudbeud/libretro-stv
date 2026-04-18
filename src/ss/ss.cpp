@@ -1458,9 +1458,10 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
    try
    {
     ZIPReader zr(std::unique_ptr<Stream>(new FileStream(zippath, FileStream::MODE_READ)));
-    const size_t idx = zr.find_by_path(bios_fn);
-    if(zr.get_file_size(idx) != 524288)
-     throw MDFN_Error(0, _("BIOS \"%s\" in \"stvbios.zip\" has incorrect size."), bios_fn.c_str());
+    size_t idx = zr.find_by_path("/" + bios_fn);
+    if(idx == SIZE_MAX) idx = zr.find_by_path(bios_fn);
+    if(idx == SIZE_MAX)
+     throw MDFN_Error(0, _("BIOS \"%s\" not found in stvbios.zip."), bios_fn.c_str());
     std::unique_ptr<Stream> s(zr.open(idx));
     s->read(BIOSROM, 512 * 1024);
     MDFN_printf(_("[SS] BIOS \"%s\" loaded from stvbios.zip\n"), bios_fn.c_str());
@@ -1709,8 +1710,7 @@ static MDFN_COLD void Load(GameFile* gf)
 
    InitCommon(MDFN_GetSettingUI("ss.cpu_cache_stv"), DB_GetSTVHacks(sgi), CART_STV, region, nullptr, gf, sgi);
 
-   if(sgi->rotate)
-    MDFNGameInfo->rotated = MDFN_ROTATE90;
+   MDFNGameInfo->rotated = sgi->rotate ? MDFN_ROTATE90 : MDFN_ROTATE0;
 
    MDFNGameInfo->GameType = GMT_ARCADE;
 
