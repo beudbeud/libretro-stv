@@ -1707,7 +1707,7 @@ static MDFN_COLD void Load(GameFile* gf)
 
    MDFNGameInfo->name = sgi->name;
 
-   InitCommon(CPUCACHE_EMUMODE_FULL, DB_GetSTVHacks(sgi), CART_STV, region, nullptr, gf, sgi);
+   InitCommon(MDFN_GetSettingUI("ss.cpu_cache_stv"), DB_GetSTVHacks(sgi), CART_STV, region, nullptr, gf, sgi);
 
    if(sgi->rotate)
     MDFNGameInfo->rotated = MDFN_ROTATE90;
@@ -2534,6 +2534,8 @@ static const MDFNSetting SSSettings[] =
 #endif
 
  { "ss.dbg_exe_cdpath", MDFNSF_SUPPRESS_DOC | MDFNSF_CAT_PATH, gettext_noop("CD image to use with bootable cart ROM image loading."), NULL, MDFNST_STRING, "" },
+
+ { "ss.cpu_cache_stv", MDFNSF_EMU_STATE, gettext_noop("ST-V CPU cache emulation mode."), gettext_noop("'data_cb' disables instruction cache emulation (faster); 'full' enables both caches (accurate but slow)."), MDFNST_ENUM, "data_cb", NULL, NULL, NULL, NULL, CEM_List },
 
  { "ss.dbg_cem", MDFNSF_SUPPRESS_DOC | MDFNSF_NONPERSISTENT, gettext_noop("Cache emulation mode debug override."), NULL, MDFNST_ENUM, "auto", NULL, NULL, NULL, NULL, CEM_List },
  { "ss.dbg_hh", MDFNSF_SUPPRESS_DOC | MDFNSF_NONPERSISTENT, gettext_noop("Horrible hacks debug override."), NULL, MDFNST_MULTI_ENUM, "auto", NULL, NULL, NULL, NULL, HH_List },

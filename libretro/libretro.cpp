@@ -256,6 +256,12 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_autortc_lang", "BIOS Language", NULL, NULL, NULL, "system",
       { {"english","English"},{"japanese","Japanese"},{"french","French"},
         {"german","German"},{"spanish","Spanish"},{"italian","Italian"},{NULL,NULL} }, "english" },
+    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
+      "data_cb: fast (no instruction cache). full: accurate but slow. Restart required.", NULL, "performance",
+      { {"data_cb","Fast (data only)"},{"data","Data (full)"},{"full","Full (accurate)"},{NULL,NULL} }, "data_cb" },
+    { "mednafen_stv_vdp2_thread", "VDP2 Rendering Thread", NULL,
+      "Offload VDP2 background rendering to a dedicated CPU core. Requires restart.", NULL, "performance",
+      { {"disabled","Disabled"},{"enabled","Enabled (core 3)"},{NULL,NULL} }, "disabled" },
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
 static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
@@ -294,6 +300,10 @@ static void apply_options()
     BOOL_OPT("mednafen_stv_bios_sanity",  "ss.bios_sanity");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
     STR_OPT ("mednafen_stv_autortc_lang", "ss.smpc.autortc.lang");
+    STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
+    var.key = "mednafen_stv_vdp2_thread";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        MDFNI_SetSetting("ss.affinity.vdp2", strcmp(var.value, "enabled") == 0 ? "8" : "0");
 #undef BOOL_OPT
 #undef STR_OPT
 
