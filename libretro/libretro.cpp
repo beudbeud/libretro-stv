@@ -236,7 +236,7 @@ static void update_input()
 /* ── Core options ─────────────────────────────────────────────────────────── */
 static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_region", "Region", NULL, NULL, NULL, "system",
-      { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "jp" },
+      { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_h_overscan", "Show Horizontal Overscan", NULL, NULL, NULL, "video",
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_blend", "Horizontal Blend Filter", NULL, NULL, NULL, "video",
