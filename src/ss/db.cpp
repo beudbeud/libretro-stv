@@ -427,7 +427,7 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken(encryption+compression)
+ // 315-5838 decompression + decipher implemented
  {
   "Decathlete (V1.000)",
   SMPC_AREA_JP,
@@ -438,6 +438,8 @@ static const STVGameInfo STVGI[] =
   false,
   {
    { 0x0000001, 0x0100000, STV_MAP_BYTE, "epr18967.13" },
+   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967.13" },  /* MAME ROM_RELOAD_PLAIN: 315-5838 reads code area as plain bytes */
+   { 0x0300000, 0x0100000, STV_MAP_16BE, "epr18967.13" },  /* MAME ROM_RELOAD_PLAIN */
 
    { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr18968.2" },
    { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr18969.3" },
@@ -447,7 +449,7 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken(encryption+compression)
+ // 315-5838 decompression + decipher implemented
  {
   "Decathlete (V1.001)",
   SMPC_AREA_JP,
@@ -458,6 +460,8 @@ static const STVGameInfo STVGI[] =
   false,
   {
    { 0x0000001, 0x0100000, STV_MAP_BYTE, "epr18967a.13" },
+   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967a.13" },  /* MAME ROM_RELOAD_PLAIN: 315-5838 reads code area as plain bytes */
+   { 0x0300000, 0x0100000, STV_MAP_16BE, "epr18967a.13" },  /* MAME ROM_RELOAD_PLAIN */
 
    { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr18968.2" },
    { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr18969.3" },

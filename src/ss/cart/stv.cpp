@@ -56,17 +56,16 @@ static Chip5881 chip5881;
 static MDFN_HOT void ROM_Read(uint32 A, uint16* DB)
 {
  /* 315-5838: MAME decathlt_prot_r at 0x27FFFF8-B, 0x2FFFFF8-B, 0x37FFFF8-B.
-  * The ROM bank is determined by bits [24:23] of the READ address.
-  * In MAME, protbank is set to match the bank of the WRITE address, but for
-  * reads the bank is implicit in which read address the CPU uses.
-  * We select the bank from the read address directly before calling data_r(). */
+  * MAME sets the ROM bank only on WRITE, never on READ — reads just clock
+  * out whatever has been decompressed from the bank last selected by a
+  * srcaddr write.  Setting the bank on read would corrupt an in-flight
+  * decompression if the CPU reads from a different bank mirror than the
+  * one used for srcaddr. */
  if(MDFN_UNLIKELY(ECChip == STV_EC_CHIP_315_5838 && chip5838.active))
  {
-  const uint32 off  = (A - 0x02000000) & 0x7FFFFF;
-  const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
+  const uint32 off = (A - 0x02000000) & 0x7FFFFF;
   if(MDFN_UNLIKELY(off >= 0x7FFFF8))
   {
-   chip5838.set_bank(bank);   /* select bank from read address */
    *DB = chip5838.data_r();
    return;
   }
@@ -133,17 +132,20 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
 {
  if(ECChip == STV_EC_CHIP_315_5838)
  {
-  /* 315-5838 (Decathlete) — MAME architecture:
-   * Writes to the last 16 bytes of each 8MB ROM bank configure the chip.
-   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF0 → srcaddr hi (usually 0)
-   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF2 → srcaddr lo  (word offset)
-   *   (A-0x02000000) & 0x7FFFFF == 0x7FFFF4 → data_w
-   * Bank selected by bits [24:23] of byte offset.
-   * Also handled via CS2 dual-dispatch in scu.inc for compatibility.  */
+  /* 315-5838 (Decathlete) — MAME decathlt_prot_srcaddr_w:
+   * Bank is set from the WRITE address bits [24:23] on every write to
+   * the cart range, independent of whether the offset targets a chip
+   * register.  Register dispatch is at 4-byte aligned offsets 0x7FFFF0
+   * (srcaddr) and 0x7FFFF4 (data_w); SH-2 32-bit writes are split by
+   * the bus into two 16-bit writes so the HI/LO halves land at
+   *   0x7FFFF0 (hi) / 0x7FFFF2 (lo) → srcaddr combine
+   *   0x7FFFF4 (hi) → mode_w,  0x7FFFF6 (lo) → data_w                 */
   if(sizeof(T) == 2)
   {
-   const uint32 off = (A - 0x02000000) & 0x7FFFFF;
+   const uint32 off  = (A - 0x02000000) & 0x7FFFFF;
    const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
+   chip5838.set_bank(bank);
+
    if(MDFN_UNLIKELY(off == 0x7FFFF0))
    {
     chip5838.pending_srcaddr_hi = (uint32)*DB << 16;
@@ -152,18 +154,18 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
    if(MDFN_UNLIKELY(off == 0x7FFFF2))
    {
     uint32 full = (chip5838.pending_srcaddr_hi | *DB) & 0x007FFFFF;
-    chip5838.pending_srcaddr_hi = 0;  /* reset for next write */
-    chip5838.set_bank(bank);
-    chip5838.srcaddr_w16(full);  /* full is 23-bit — preserve all bits */    return;
+    chip5838.pending_srcaddr_hi = 0;
+    chip5838.srcaddr_w16(full);
+    return;
    }
-   if(MDFN_UNLIKELY(off == 0x7FFFF4 || off == 0x7FFFF6))
+   if(MDFN_UNLIKELY(off == 0x7FFFF4))
    {
-    /* data_w: table upload — select bank first so each bank has its own cs */
-    chip5838.active_bank = (int)bank;
-    if(off == 0x7FFFF4)
-     chip5838.set_table_upload_mode_w(*DB);
-    else
-     chip5838.upload_table_data_w(*DB);
+    chip5838.set_table_upload_mode_w(*DB);
+    return;
+   }
+   if(MDFN_UNLIKELY(off == 0x7FFFF6))
+   {
+    chip5838.upload_table_data_w(*DB);
     return;
    }
   }
@@ -251,10 +253,14 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
 
 static CartInfo* g_CartPtr = nullptr;  /* Save cart pointer for diagnostics */
 
-/* Exposed to scu.inc dual dispatch */
+/* Exposed to scu.inc dual dispatch.
+ * MAME connects the 315-5838 on CS01 only — CS2 accesses must NOT be
+ * routed to the chip, otherwise routine I/O-board polls (inputs, coin,
+ * test switch) during gameplay would consume Huffman stream words and
+ * corrupt sprite decompression.  Always return false. */
 bool CART_STV_Chip5838IsActive(void) noexcept
 {
- return (ECChip == STV_EC_CHIP_315_5838) && chip5838.active;
+ return false;
 }
 
 static void Reset(bool powering_up)
@@ -286,7 +292,7 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(chip5838.val),
   SFVAR(chip5838.num_bits),
   SFVAR(chip5838.active_bank),
-  SFPTR8N((uint8*)chip5838.cs, sizeof(chip5838.cs), "chip5838_cs4"),
+  SFPTR8N((uint8*)&chip5838.cs, sizeof(chip5838.cs), "chip5838_cs"),
 
   /* 315-5881 chip state */
   SFVAR(chip5881.prot_cur_address),
@@ -341,45 +347,21 @@ static void Kill(void)
  * Writes to odd  offsets (0x1a,0x1e,0x22,0x26) = upload_table_data_w     */
 
 
+/* CS2 handlers — the ST-V protection chips (315-5838, 315-5881) live on
+ * CS01 in MAME, not CS2.  CS2 at 0x05800000+ is the A-bus I/O board
+ * (coin, test, service, player inputs) and must be left untouched.
+ * These stubs just return open-bus for reads and ignore writes. */
 static MDFN_HOT void CS2_Read_diag(uint32 A, uint16* DB)
 {
- /* 315-5838 (Decathlete) uses CS2 for the BIOS protection check.
-  * 315-5881 is CS01-only in MAME — any CS2 access here would wrongly
-  * consume stream words and corrupt the decompressed sprite data. */
- if(ECChip == STV_EC_CHIP_315_5838) {
-  if(!chip5838.active) {
-   *DB = 0x0000;
-  } else {
-   *DB = chip5838.data_r_raw();
-  }
- } else {
-  *DB = 0xFFFF;
- }
+ *DB = 0xFFFF;
 }
 
 static MDFN_HOT void CS2_Write8_diag(uint32 A, uint16* DB)
 {
- /* 8-bit writes not expected; ignore */
 }
 
 static MDFN_HOT void CS2_Write16_diag(uint32 A, uint16* DB)
 {
- const uint32 off = A & 0x3E;
-
- /* Same rationale as CS2_Read_diag: 315-5881 is CS01-only.  Routing
-  * CS2 writes to set_addr_low/hi/subkey could corrupt chip state
-  * mid-decompression on unrelated CS2 accesses. */
- if(ECChip == STV_EC_CHIP_315_5838) {
-  if(off == 0x08 || off == 0x0a) {
-   chip5838.srcaddr_w16(*DB);
-  } else if(off == 0x18 || off == 0x1c || off == 0x20 || off == 0x24) {
-   chip5838.active_bank = 0;  /* CS2 = bank 0 */
-   chip5838.set_table_upload_mode_w(*DB);
-  } else {
-   chip5838.active_bank = 0;
-   chip5838.upload_table_data_w(*DB);
-  }
- }
 }
 
 void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
@@ -526,18 +508,18 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
    * issues when storing function pointers from the static lib.            */
    c->CS2M_SetRW8W16(0x00, 0x3F, CS2_Read_diag, CS2_Write8_diag, CS2_Write16_diag);
 
-  /* 315-5838: connect chip to MPR ROMs (not the full ROM array).
-   * The 315-5838 is physically wired to the MPR ROM chips which start
-   * at byte offset 0x400000 in our ROM array (= word offset 0x200000).
-   * srcoffset=0 in the chip = first word of mpr18968.2.              */
+  /* 315-5838: connect chip to full cart ROM space, matching MAME protbank layout:
+   *   bank 0 = ROM[0x0000000..0x7FFFFF]  (epr area + mpr18968.2)
+   *   bank 1 = ROM[0x0800000..0xFFFFFF]  (mpr18969.3 + mpr18970.4)
+   *   bank 2 = ROM[0x1000000..0x17FFFFF] (mpr18971.5 + mpr18972.6)
+   * srcoffset is a 23-bit index into the 8MB bank window. */
   if(ECChip == STV_EC_CHIP_315_5838)
   {
-   static const uint32 MPR_WORD_OFFSET = 0x200000; /* byte 0x400000 / 2 */
    chip5838.reset();
-   chip5838.rom            = ROM + MPR_WORD_OFFSET;  /* bank 0 default (MPR0, CS2 BIOS check) */
-   chip5838.rom_base       = ROM + MPR_WORD_OFFSET;  /* invariant MPR0 base for CS2           */
-   chip5838.rom_phys       = ROM + MPR_WORD_OFFSET;  /* CS01 bank 0 = mpr18968.2 (byte 0x400000) */
-   chip5838.rom_size_words = (0x3000000 / sizeof(uint16)) - MPR_WORD_OFFSET;
+   chip5838.rom            = ROM;                        /* bank 0 default */
+   chip5838.rom_base       = ROM;
+   chip5838.rom_phys       = ROM;                        /* bank N = ROM + N*0x400000 words */
+   chip5838.rom_size_words = 0x3000000 / sizeof(uint16); /* full ROM array */
    chip5838.pending_srcaddr_hi = 0;
    MDFN_printf(_("[CART-STV] 315-5838 decipher chip enabled (Decathlete)\n"));
   }

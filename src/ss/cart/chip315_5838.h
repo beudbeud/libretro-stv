@@ -29,6 +29,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
+
+/* Define to enable debug trace — redirect to stderr.
+ * Dumps: decipher self-test, srcaddr writes, first 32 source words,
+ * first 32 decipher outputs, and first 64 decompressed bytes.        */
+//#define CHIP5838_DEBUG 1
 
 namespace MDFN_IEN_SS
 {
@@ -59,11 +65,11 @@ struct Chip5838CompState
 /* ── Chip state ─────────────────────────────────────────────────────────── */
 struct Chip5838
 {
- /* Per-bank compression state: each bank has its own Huffman tree and
-  * dictionary, uploaded independently by the CPU before each block.
-  * Bank 0 = rom_phys+0 (MPR0/1), bank 1 = +8MB, bank 2 = +16MB (MPR3/4) */
- Chip5838CompState cs[4];   /* one set per bank */
- int active_bank;           /* bank currently selected for decompression */
+ /* Single compression state (matches MAME): one Huffman tree and dictionary
+  * for the entire chip.  The bank only selects which ROM region to read
+  * compressed data from; the tree/dictionary are shared across all banks. */
+ Chip5838CompState cs;
+ int active_bank;           /* ROM bank currently selected (0-2) */
 
  uint32_t srcoffset;
  uint32_t srcstart;
@@ -109,8 +115,19 @@ struct Chip5838
   num_bits            = 0;
   pending_srcaddr_hi  = 0;
   active_bank         = 0;
-  memset(cs, 0, sizeof(cs));
+  memset(&cs, 0, sizeof(cs));
+#ifdef CHIP5838_DEBUG
+  dbg_src_count  = 0;
+  dbg_dec_count  = 0;
+  dbg_byte_count = 0;
+#endif
  }
+
+#ifdef CHIP5838_DEBUG
+ int dbg_src_count;
+ int dbg_dec_count;
+ int dbg_byte_count;
+#endif
 
  /* ── decipher: 16-bit nonlinear permutation (Decathlete-specific) ─── */
  uint16_t decipher(uint16_t c)
@@ -148,9 +165,34 @@ struct Chip5838
   if(byte_addr + 1 < rom_size_words * 2)
    word = *(const uint16_t*)((const uint8_t*)rom + byte_addr);
 
+  /* MAME's device_rom_interface defaults to ENDIANNESS_LITTLE, so its
+   * read_word() is also a LE read.  However MAME's cart is ROM_REGION32_BE:
+   *   ROM_LOAD16_WORD_SWAP stores (MSB, LSB) → LE read = (LSB<<8)|MSB
+   *   ROM_RELOAD_PLAIN    stores (f0,  f1 ) → LE read = (f1<<8)|f0
+   * libretro stores the same data with opposite byte layout in the ROM array
+   * (STV_MAP_16LE for WORD_SWAP, STV_MAP_16BE for RELOAD_PLAIN), so both
+   * raw LE reads come out byte-swapped vs MAME.  Swap here to compensate. */
+#ifdef CHIP5838_DEBUG
+  const uint16_t raw = word;
+#endif
+  word = (uint16_t)((word >> 8) | (word << 8));
+
   srcoffset = (srcoffset + 1) & 0x007FFFFF;
   if(srcoffset == srcstart)
    abort = true;
+
+#ifdef CHIP5838_DEBUG
+  if(dbg_src_count < 32)
+  {
+   const uint32_t abs_byte = (uint32_t)(((const uint8_t*)rom - (const uint8_t*)rom_phys) + byte_addr);
+   fprintf(stderr, "[5838] src[%2d] bank=%d srcoff=0x%06X byte_addr=0x%06X raw=0x%04X bswap=0x%04X\n",
+    dbg_src_count, active_bank, (unsigned)(srcoffset ? srcoffset-1 : 0x7FFFFF),
+    (unsigned)byte_addr, (unsigned)raw, (unsigned)word);
+   dbg_src_count++;
+   if(dbg_src_count == 32)
+    fprintf(stderr, "[5838] (source_word_r trace complete)\n");
+  }
+#endif
 
   return word;
  }
@@ -165,8 +207,17 @@ struct Chip5838
 
    if(num_bits_compressed == 0)
    {
-    val_compressed      = decipher(source_word_r());
+    uint16_t raw_src = source_word_r();
+    val_compressed      = decipher(raw_src);
     num_bits_compressed = 16;
+#ifdef CHIP5838_DEBUG
+    if(dbg_dec_count < 32)
+    {
+     fprintf(stderr, "[5838] dec[%2d] raw=0x%04X decipher=0x%04X\n",
+      dbg_dec_count, (unsigned)raw_src, (unsigned)val_compressed);
+     dbg_dec_count++;
+    }
+#endif
    }
 
    /* Extract one bit from the deciphered stream (MSB first) */
@@ -178,17 +229,28 @@ struct Chip5838
    /* Search Huffman tree for a matching code */
    for(int i = 0; i < 12; i++)
    {
-    if(num_bits != cs[active_bank].tree[i].len) continue;
-    if(val < (cs[active_bank].tree[i].pattern >> (12 - num_bits))) continue;
+    if(num_bits != cs.tree[i].len) continue;
+    if(val < (cs.tree[i].pattern >> (12 - num_bits))) continue;
     if((num_bits < 12) &&
-       (val >= (cs[active_bank].tree[i+1].pattern >> (12 - num_bits)))) continue;
+       (val >= (cs.tree[i+1].pattern >> (12 - num_bits)))) continue;
 
-    int j = cs[active_bank].tree[i].idx + val - (cs[active_bank].tree[i].pattern >> (12 - num_bits));
+    int j = cs.tree[i].idx + val - (cs.tree[i].pattern >> (12 - num_bits));
 
     val      = 0;
     num_bits = 0;
 
-    return cs[active_bank].dictionary[j];
+#ifdef CHIP5838_DEBUG
+    if(dbg_byte_count < 64)
+    {
+     fprintf(stderr, "[5838] byte[%2d] dict[%d]=0x%02X\n",
+      dbg_byte_count, j, (unsigned)cs.dictionary[j]);
+     dbg_byte_count++;
+     if(dbg_byte_count == 64)
+      fprintf(stderr, "[5838] (decompressed byte trace complete)\n");
+    }
+#endif
+
+    return cs.dictionary[j];
    }
   }
  }
@@ -223,6 +285,25 @@ struct Chip5838
   num_bits_compressed = 0;
   val                 = 0;
   num_bits            = 0;
+#ifdef CHIP5838_DEBUG
+  dbg_src_count  = 0;
+  dbg_dec_count  = 0;
+  dbg_byte_count = 0;
+  /* One-time decipher self-test */
+  static bool selftest_done = false;
+  if(!selftest_done) {
+   selftest_done = true;
+   uint16_t tv = decipher(0x1533);
+   fprintf(stderr, "[5838] SELFTEST: decipher(0x1533)=0x%04X  expected=0x16BE  %s\n",
+    (unsigned)tv, tv == 0x16BE ? "PASS" : "FAIL !!!");
+  }
+  fprintf(stderr, "[5838] srcaddr_w16: bank=%d srcoffset=0x%06X\n",
+   active_bank, (unsigned)srcoffset);
+  /* Dump full tree state so we can verify against MAME */
+  for(int _i = 0; _i < 12; _i++)
+   fprintf(stderr, "[5838]   tree[%2d] len=%2u idx=%3u pattern=0x%04X\n",
+    _i, cs.tree[_i].len, cs.tree[_i].idx, cs.tree[_i].pattern);
+#endif
  }
 
  /* Set table upload mode.
@@ -230,39 +311,57 @@ struct Chip5838
   * tree(0) / dictionary(1) selection.  Resets the appropriate write index. */
  void set_table_upload_mode_w(uint16_t v)
  {
-  cs[active_bank].mode = v;
-  if(!(cs[active_bank].mode & 0x80))
-   cs[active_bank].it2 = 0;
+  cs.mode = v;
+  if(!(cs.mode & 0x80))
+   cs.it2 = 0;
   else
-   cs[active_bank].id = 0;
+   cs.id = 0;
+#ifdef CHIP5838_DEBUG
+  fprintf(stderr, "[5838] upload_mode: 0x%04X → %s (reset index)\n",
+   v, (v & 0x80) ? "DICT" : "TREE");
+#endif
  }
 
  /* Upload one 16-bit value into tree or dictionary */
  void upload_table_data_w(uint16_t v)
  {
-  if(!(cs[active_bank].mode & 0x80))
+  if(!(cs.mode & 0x80))
   {
    /* Tree upload: alternating (len/idx) and (pattern) entries.
     * Writes to entries 0-11 only; entry 12 is the zero sentinel. */
-   if(cs[active_bank].it2 / 2 >= 12) return;
-   if((cs[active_bank].it2 & 1) == 0)
+   if(cs.it2 / 2 >= 12) return;
+   if((cs.it2 & 1) == 0)
    {
-    cs[active_bank].tree[cs[active_bank].it2/2].len     = (v & 0xFF00) >> 8;
-    cs[active_bank].tree[cs[active_bank].it2/2].idx     = (v & 0x00FF);
+    cs.tree[cs.it2/2].len     = (v & 0xFF00) >> 8;
+    cs.tree[cs.it2/2].idx     = (v & 0x00FF);
+#ifdef CHIP5838_DEBUG
+    fprintf(stderr, "[5838] tree[%2d] len=0x%02X idx=0x%02X\n",
+     cs.it2/2, cs.tree[cs.it2/2].len, cs.tree[cs.it2/2].idx);
+#endif
    }
    else
    {
-    cs[active_bank].tree[cs[active_bank].it2/2].pattern = v;
+    cs.tree[cs.it2/2].pattern = v;
+#ifdef CHIP5838_DEBUG
+    fprintf(stderr, "[5838] tree[%2d] pattern=0x%04X\n", cs.it2/2, v);
+#endif
    }
-   cs[active_bank].it2++;
+   cs.it2++;
   }
   else
   {
    /* Dictionary upload: two bytes per 16-bit write.
     * Guard: id must be ≤ 254 so both bytes (id, id+1) fit in [0..255]. */
-   if(cs[active_bank].id >= 255) return;
-   cs[active_bank].dictionary[cs[active_bank].id++] = (v & 0xFF00) >> 8;
-   cs[active_bank].dictionary[cs[active_bank].id++] = (v & 0x00FF);
+   if(cs.id >= 255) return;
+#ifdef CHIP5838_DEBUG
+   if(cs.id < 32 || cs.id >= 250)
+    fprintf(stderr, "[5838] dict[%3d]=0x%02X dict[%3d]=0x%02X\n",
+     cs.id, (v>>8)&0xFF, cs.id+1, v&0xFF);
+   else if(cs.id == 32)
+    fprintf(stderr, "[5838] dict[...] (skipping middle entries)\n");
+#endif
+   cs.dictionary[cs.id++] = (v & 0xFF00) >> 8;
+   cs.dictionary[cs.id++] = (v & 0x00FF);
   }
  }
 };
