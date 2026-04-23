@@ -42,9 +42,10 @@ static retro_input_poll_t         input_poll_cb   = nullptr;
 static retro_input_state_t        input_state_cb  = nullptr;
 
 /* ── State ─────────────────────────────────────────────────────────────────── */
-static MDFNGI  *game_info   = nullptr;
-static int g_last_w = 0, g_last_h = 0;
-static bool     initialized = false;
+static MDFNGI  *game_info        = nullptr;
+static int      g_last_w         = 0, g_last_h = 0;
+static bool     initialized      = false;
+static size_t   s_serialize_size = 0;
 
 static constexpr int FB_W = 704, FB_H = 512;
 static MDFN_Surface *surf       = nullptr;
@@ -512,6 +513,7 @@ RETRO_API void retro_unload_game(void)
 {
     if(game_info) { MDFNI_CloseGame(); game_info = nullptr; }
     port_ptr[0] = port_ptr[1] = nullptr;
+    s_serialize_size = 0;
 }
 
 RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
@@ -620,19 +622,39 @@ RETRO_API void retro_run(void)
 RETRO_API size_t retro_serialize_size(void)
 {
     if(!game_info) return 0;
-    return 4 * 1024 * 1024;
+    if(!s_serialize_size) {
+        try {
+            MemoryStream st(8 * 1024 * 1024, false);
+            MDFNSS_SaveSM(&st, true);
+            s_serialize_size = (size_t)st.size();
+            lr_log(RETRO_LOG_INFO, "Serialize size: %zu bytes\n", s_serialize_size);
+        } catch(std::exception &e) {
+            lr_log(RETRO_LOG_ERROR, "retro_serialize_size failed: %s\n", e.what());
+            return 0;
+        }
+    }
+    return s_serialize_size;
 }
 
 RETRO_API bool retro_serialize(void *data, size_t size)
 {
     if(!game_info || !data) return false;
     try {
-        MemoryStream st(size, -1);
+        MemoryStream st(s_serialize_size ? s_serialize_size : size, false);
         MDFNSS_SaveSM(&st, true);
-        if((size_t)st.size() > size) return false;
-        memcpy(data, st.map(), st.size());
+        size_t written = (size_t)st.size();
+        if(written > size) {
+            lr_log(RETRO_LOG_ERROR, "Serialize overflow: %zu > %zu\n", written, size);
+            return false;
+        }
+        memcpy(data, st.map(), written);
+        if(written < size)
+            memset((uint8_t*)data + written, 0, size - written);
         return true;
-    } catch(...) { return false; }
+    } catch(std::exception &e) {
+        lr_log(RETRO_LOG_ERROR, "retro_serialize failed: %s\n", e.what());
+        return false;
+    }
 }
 
 RETRO_API bool retro_unserialize(const void *data, size_t size)
@@ -644,7 +666,10 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
         st.seek(0, SEEK_SET);
         MDFNSS_LoadSM(&st, true);
         return true;
-    } catch(...) { return false; }
+    } catch(std::exception &e) {
+        lr_log(RETRO_LOG_ERROR, "retro_unserialize failed: %s\n", e.what());
+        return false;
+    }
 }
 
 RETRO_API void retro_cheat_reset(void) {}
