@@ -77,6 +77,8 @@ static bool FBDrawWhich;
 static bool DrawingActive;
 static uint32 CurCommandAddr;
 static int32 RetCommandAddr;
+static uint32 LastJumpAddr;
+static uint32 JumpLoopCount;
 static uint16 LOPR;
 
 static sscpu_timestamp_t lastts;
@@ -807,7 +809,25 @@ static INLINE void DoDrawing(void)
 	break;
 
     case 1:
-	CurCommandAddr = (CommandData[1] << 2) &~ 0xF;
+	{
+	 const uint32 nextAddr = (CommandData[1] << 2) &~ 0xF;
+	 if(nextAddr == LastJumpAddr)
+	 {
+	  if(++JumpLoopCount >= 32)
+	  {
+	   SS_DBGTI(SS_DBG_VDP1, "[VDP1] Infinite loop detected at 0x%05x; aborting", nextAddr);
+	   DrawingActive = false;
+	   VRAMUsageEnd();
+	   goto Breakout;
+	  }
+	 }
+	 else
+	 {
+	  JumpLoopCount = 0;
+	  LastJumpAddr = nextAddr;
+	 }
+	 CurCommandAddr = nextAddr;
+	}
 	break;
 
     case 2:
@@ -886,6 +906,8 @@ static void StartDrawing(void)
 
  CurCommandAddr = 0;
  RetCommandAddr = -1;
+ LastJumpAddr = ~0U;
+ JumpLoopCount = 0;
  DrawingActive = true;
  CommandPhase = 0;
  VRAMUsageStart();

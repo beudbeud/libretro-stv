@@ -3128,13 +3128,16 @@ static NO_INLINE void DrawLine(const uint16 out_line, const uint16 vdp2_line, co
      else
       pix_base_or |= (prio << PIX_PRIO_SHIFT);
 
-     if(n < 2)
-      DrawNBG[bmen][colornum][igntp][priomode % 3][ccmode](n, LB.nbg[n] + 8, w, pix_base_or);
-     else
-      DrawNBG23[colornum][igntp][priomode % 3][ccmode](n, LB.nbg[n] + 8, w, pix_base_or);
+     if(!MosaicVCount || !(MZCTL & (1U << n)))
+     {
+      if(n < 2)
+       DrawNBG[bmen][colornum][igntp][priomode % 3][ccmode](n, LB.nbg[n] + 8, w, pix_base_or);
+      else
+       DrawNBG23[colornum][igntp][priomode % 3][ccmode](n, LB.nbg[n] + 8, w, pix_base_or);
 
-     ApplyHMosaic(n, LB.nbg[n] + 8, w);
-     ApplyWin(n, LB.nbg[n] + 8);
+      ApplyHMosaic(n, LB.nbg[n] + 8, w);
+      ApplyWin(n, LB.nbg[n] + 8);
+     }
     }
     else
      MDFN_FastArraySet(LB.nbg[n] + 8, 0, w);
