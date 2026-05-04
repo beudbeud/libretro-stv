@@ -29,7 +29,7 @@ The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with 
 
 ### Batman Forever
 
-> **Status**: No sound (requires an external QSound card not emulated).
+> **Status**: No sound (requires Acclaim's RAX soundboard, an external audio expansion not emulated).
 
 ---
 
