@@ -1620,6 +1620,7 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
  static const char* const vdp1_instant_draw[] =
  {
   "Astra SuperStars",  /* 315-5881: stripes caused by time-sliced drawing vs FB swap timing */
+  "Virtua Fighter Kids", /* stripes on fast sprite movement */
  };
 
  /* Puzzle, board, quiz, card, fishing, golf, and other low-sprite-throughput
