@@ -26,6 +26,7 @@
  #pragma GCC optimize("Os")
 #endif
 
+namespace MDFN_IEN_SS {
 #include "scu_dsp_common.inc"
 
 template<bool looped, unsigned cond>
@@ -39,7 +40,6 @@ static NO_INLINE NO_CLONE void JMPInstr(DSPS* dsp)
  DSP_TailDispatch(dsp);
 }
 
-namespace MDFN_IEN_SS {
 MDFN_HIDE extern void (*const DSP_JMPFuncTable[2][128])(DSPS*) =
 {
  #include "scu_dsp_jmptab.inc"

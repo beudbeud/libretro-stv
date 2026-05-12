@@ -32,6 +32,7 @@
 
   // MOV [s],[d] when moving from/to the same data RAM bank seems to be treated like a NOP...
 
+namespace MDFN_IEN_SS {
 #include "scu_dsp_common.inc"
 
 
@@ -317,7 +318,6 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
  DSP_TailDispatch(dsp);
 }
 
-namespace MDFN_IEN_SS {
 MDFN_HIDE extern void (*const DSP_GenFuncTable[2][16][8][8][4])(DSPS*) =
 {
  #include "scu_dsp_gentab.inc"
