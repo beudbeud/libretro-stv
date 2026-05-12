@@ -60,6 +60,12 @@ static uint8_t *port_ptr[2]    = {};
 
 static std::string sys_dir, save_dir;
 
+/* ── Frameskip ─────────────────────────────────────────────────────────────── */
+enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
+static int g_frameskip_type     = FS_NONE;
+static int g_frameskip_interval = 1;
+static int g_frameskip_counter  = 0;
+
 /* ── Logger ────────────────────────────────────────────────────────────────── */
 static void lr_log(retro_log_level lvl, const char *fmt, ...)
 {
@@ -260,6 +266,9 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
       "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
       { {"data_cb","Fast (recommended)"},{"data","Data cache only"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+    { "mednafen_stv_frameskip", "Frameskip", NULL,
+      "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
+      { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
 static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
@@ -302,6 +311,20 @@ static void apply_options()
 #undef BOOL_OPT
 #undef STR_OPT
 
+    var.key = "mednafen_stv_frameskip";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if(strcmp(var.value, "auto") == 0) {
+            g_frameskip_type = FS_AUTO;
+        } else if(strcmp(var.value, "disabled") == 0) {
+            g_frameskip_type = FS_NONE;
+        } else {
+            g_frameskip_type     = FS_MANUAL;
+            g_frameskip_interval = atoi(var.value);
+            if(g_frameskip_interval < 1) g_frameskip_interval = 1;
+            if(g_frameskip_interval > 5) g_frameskip_interval = 5;
+        }
+        g_frameskip_counter = 0;
+    }
 }
 
 /* ── API ───────────────────────────────────────────────────────────────────── */
@@ -514,6 +537,7 @@ RETRO_API void retro_unload_game(void)
     if(game_info) { MDFNI_CloseGame(); game_info = nullptr; }
     port_ptr[0] = port_ptr[1] = nullptr;
     s_serialize_size = 0;
+    g_frameskip_counter = 0;
 }
 
 RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
@@ -541,6 +565,22 @@ RETRO_API void retro_run(void)
     }
 
     update_input();
+
+    /* Frameskip: decide whether to skip rendering this frame */
+    bool skip_frame = false;
+    if(g_frameskip_type == FS_AUTO) {
+        int av = ~0;
+        if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av))
+            skip_frame = !(av & 1);
+    } else if(g_frameskip_type == FS_MANUAL) {
+        if(g_frameskip_counter == 0) {
+            g_frameskip_counter = g_frameskip_interval;
+        } else {
+            --g_frameskip_counter;
+            skip_frame = true;
+        }
+    }
+
     for(int i = 0; i < FB_H; i++) line_widths[i] = ~0;
 
     EmulateSpecStruct espec;
@@ -552,7 +592,7 @@ RETRO_API void retro_run(void)
     espec.CustomPaletteNumEntries = 0;
     espec.InterlaceOn     = false;
     espec.InterlaceField  = false;
-    espec.skip            = 0;        /* never skip */
+    espec.skip            = skip_frame ? 1 : 0;
     espec.SoundFormatChanged = false;
     espec.SoundRate       = 44100.0;
     espec.SoundBuf        = audio_buf;
@@ -567,52 +607,56 @@ RETRO_API void retro_run(void)
     espec.soundmultiplier = 1.0;
     espec.NeedRewind      = false;
 
-    /* Diagnostic: first 3 frames skip rendering + no audio to isolate crash */
     MDFNI_Emulate(&espec);
 
     /* Video */
-    const MDFN_Rect &dr = espec.DisplayRect;
-    int dw = dr.w, dh = dr.h;
-    /* Saturn: per-scanline widths */
-    if(dh > 0 && line_widths[dr.y] != (int32)~0) {
-        int mx = 0;
-        for(int y=dr.y; y<dr.y+dh; y++) if(line_widths[y]>mx) mx=line_widths[y];
-        if(mx > 0) dw = mx;
-    }
-    if(dw<=0) dw=320; if(dh<=0) dh=240;
-    /* Clamp garbage transition frames (e.g. 4x224 during VDP2 mode switch). */
-    if(dw < 64) dw = (g_last_w >= 64) ? g_last_w : 320;
-
-    /* Interlaced: DisplayRect.h = full frame (e.g. 480). For geometry/SwitchRes
-     * we report the field height (240) — the actual scanline count on the CRT.
-     * video_cb still gets the full height so the deinterlacer can work.       */
-    int display_h = espec.InterlaceOn ? dh / 2 : dh;
-
-    /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
-    if(dw != g_last_w || display_h != g_last_h) {
-        g_last_w = dw; g_last_h = display_h;
-        bool is_tate = game_info && (game_info->rotated != 0);
-        retro_game_geometry geo={};
-        if(is_tate) {
-            geo.base_width   = display_h;
-            geo.base_height  = dw;
-            geo.max_width    = FB_H;
-            geo.max_height   = dw;
-        } else {
-            geo.base_width   = dw;
-            geo.base_height  = display_h;
-            geo.max_width    = FB_W;
-            geo.max_height   = display_h;
+    if(skip_frame) {
+        video_cb(NULL, g_last_w > 0 ? g_last_w : 320,
+                       g_last_h > 0 ? g_last_h : 224, 0);
+    } else {
+        const MDFN_Rect &dr = espec.DisplayRect;
+        int dw = dr.w, dh = dr.h;
+        /* Saturn: per-scanline widths */
+        if(dh > 0 && line_widths[dr.y] != (int32)~0) {
+            int mx = 0;
+            for(int y=dr.y; y<dr.y+dh; y++) if(line_widths[y]>mx) mx=line_widths[y];
+            if(mx > 0) dw = mx;
         }
-        geo.aspect_ratio = 4.f / 3.f;
-        environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
-    }
+        if(dw<=0) dw=320; if(dh<=0) dh=240;
+        /* Clamp garbage transition frames (e.g. 4x224 during VDP2 mode switch). */
+        if(dw < 64) dw = (g_last_w >= 64) ? g_last_w : 320;
 
-    const uint32_t *px = reinterpret_cast<const uint32_t*>(surf->pixels)
-        + (uint64_t)dr.y * surf->pitchinpix + dr.x;
-    /* For interlaced frames, we pass the full dh so RA can deinterlace.
-     * The pitch stays the same (full framebuffer row stride).            */
-    video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
+        /* Interlaced: DisplayRect.h = full frame (e.g. 480). For geometry/SwitchRes
+         * we report the field height (240) — the actual scanline count on the CRT.
+         * video_cb still gets the full height so the deinterlacer can work.       */
+        int display_h = espec.InterlaceOn ? dh / 2 : dh;
+
+        /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
+        if(dw != g_last_w || display_h != g_last_h) {
+            g_last_w = dw; g_last_h = display_h;
+            bool is_tate = game_info && (game_info->rotated != 0);
+            retro_game_geometry geo={};
+            if(is_tate) {
+                geo.base_width   = display_h;
+                geo.base_height  = dw;
+                geo.max_width    = FB_H;
+                geo.max_height   = dw;
+            } else {
+                geo.base_width   = dw;
+                geo.base_height  = display_h;
+                geo.max_width    = FB_W;
+                geo.max_height   = display_h;
+            }
+            geo.aspect_ratio = 4.f / 3.f;
+            environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
+        }
+
+        const uint32_t *px = reinterpret_cast<const uint32_t*>(surf->pixels)
+            + (uint64_t)dr.y * surf->pitchinpix + dr.x;
+        /* For interlaced frames, we pass the full dh so RA can deinterlace.
+         * The pitch stays the same (full framebuffer row stride).            */
+        video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
+    }
 
     /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer */
     if(espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
