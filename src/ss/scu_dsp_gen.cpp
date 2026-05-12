@@ -34,25 +34,6 @@
 
 #include "scu_dsp_common.inc"
 
-static FORCE_INLINE void SetC(DSPS* dsp, bool value)
-{
- dsp->FlagC = value;
-}
-
-static FORCE_INLINE void CalcZS32(DSPS* dsp, uint32 val)
-{
- dsp->FlagS = (int32)val < 0;
- dsp->FlagZ = !val;
-}
-
-static FORCE_INLINE void CalcZS48(DSPS* dsp, uint64 val)
-{
- val <<= 16;
-
- dsp->FlagS = (int64)val < 0;
- dsp->FlagZ = !val;
-}
-
 
 template<const bool looped, const unsigned alu_op, const unsigned x_op, const unsigned y_op, const unsigned d1_op>
 static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
@@ -80,8 +61,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   case 0x01:
   {
    ALU.L &= dsp->P.L;
-   SetC(dsp, false);
-   CalcZS32(dsp, ALU.L);
+   DSP_SetC(dsp, false);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -91,8 +72,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   case 0x02:
   {
    ALU.L |= dsp->P.L;
-   SetC(dsp, false);
-   CalcZS32(dsp, ALU.L);
+   DSP_SetC(dsp, false);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -102,8 +83,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   case 0x03:
   {
    ALU.L ^= dsp->P.L;
-   SetC(dsp, false);
-   CalcZS32(dsp, ALU.L);
+   DSP_SetC(dsp, false);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -115,8 +96,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
    const uint64 tmp = (uint64)ALU.L + dsp->P.L;
 
    dsp->FlagV |= (((~(ALU.L ^ dsp->P.L)) & (ALU.L ^ tmp)) >> 31) & 1;
-   SetC(dsp, (tmp >> 32) & 0x1);
-   CalcZS32(dsp, tmp);
+   DSP_SetC(dsp, (tmp >> 32) & 0x1);
+   DSP_CalcZS32(dsp, tmp);
    ALU.L = tmp;
   }
   break;
@@ -129,8 +110,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
    const uint64 tmp = (uint64)ALU.L - dsp->P.L;
 
    dsp->FlagV |= ((((ALU.L ^ dsp->P.L)) & (ALU.L ^ tmp)) >> 31) & 1;
-   SetC(dsp, (tmp >> 32) & 0x1);
-   CalcZS32(dsp, tmp);
+   DSP_SetC(dsp, (tmp >> 32) & 0x1);
+   DSP_CalcZS32(dsp, tmp);
    ALU.L = tmp;
   }
   break;
@@ -143,8 +124,8 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
    const uint64 tmp = (ALU.T & 0xFFFFFFFFFFFFULL) + (dsp->P.T & 0xFFFFFFFFFFFFULL);
 
    dsp->FlagV |= (((~(ALU.T ^ dsp->P.T)) & (ALU.T ^ tmp)) >> 47) & 1;
-   SetC(dsp, (tmp >> 48) & 0x1);
-   CalcZS48(dsp, tmp);
+   DSP_SetC(dsp, (tmp >> 48) & 0x1);
+   DSP_CalcZS48(dsp, tmp);
    ALU.T = tmp;
   }
   break;
@@ -156,9 +137,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   {
    const bool new_C = ALU.L & 0x1;
 
-   SetC(dsp, new_C);
+   DSP_SetC(dsp, new_C);
    ALU.L = (int32)ALU.L >> 1;
-   CalcZS32(dsp, ALU.L);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -169,9 +150,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   {
    const bool new_C = ALU.L & 0x1;
 
-   SetC(dsp, new_C);
+   DSP_SetC(dsp, new_C);
    ALU.L = (ALU.L >> 1) | (new_C << 31);
-   CalcZS32(dsp, ALU.L);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -182,9 +163,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   {
    const bool new_C = ALU.L >> 31;
 
-   SetC(dsp, new_C);
+   DSP_SetC(dsp, new_C);
    ALU.L <<= 1;
-   CalcZS32(dsp, ALU.L);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -195,9 +176,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   {
    const bool new_C = ALU.L >> 31;
 
-   SetC(dsp, new_C);
+   DSP_SetC(dsp, new_C);
    ALU.L = (ALU.L << 1) | new_C;
-   CalcZS32(dsp, ALU.L);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
 
@@ -208,9 +189,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
   {
    const bool new_C = (ALU.L >> 24) & 1;
 
-   SetC(dsp, new_C);
+   DSP_SetC(dsp, new_C);
    ALU.L = (ALU.L << 8) | (ALU.L >> 24);
-   CalcZS32(dsp, ALU.L);
+   DSP_CalcZS32(dsp, ALU.L);
   }
   break;
  }
@@ -336,7 +317,9 @@ static NO_INLINE NO_CLONE void GeneralInstr(DSPS* dsp)
  DSP_TailDispatch(dsp);
 }
 
+namespace MDFN_IEN_SS {
 MDFN_HIDE extern void (*const DSP_GenFuncTable[2][16][8][8][4])(DSPS*) =
 {
  #include "scu_dsp_gentab.inc"
 };
+}

@@ -80,7 +80,9 @@ static NO_INLINE NO_CLONE void MVIInstr(DSPS* dsp)
 }
 
 
+namespace MDFN_IEN_SS {
 MDFN_HIDE extern void (*const DSP_MVIFuncTable[2][16][128])(DSPS*) =
 {
  #include "scu_dsp_mvitab.inc"
 };
+}

@@ -19,6 +19,12 @@
 ** 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
+#ifndef FORCE_INLINE
+ #define FORCE_INLINE INLINE
+#endif
+
+using namespace MDFN_IEN_SS;
+
 #if defined(__loongarch64__) || defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(__arm64__) || defined(__ppc64__) || defined(__PPC64__) || defined(__ppce64le__)
  #define DSP_INSTR_BASE_UIPT ((uintptr_t)DSP_Init)
  #define DSP_INSTR_RECOVER_TCAST int32
@@ -55,7 +61,7 @@ union DSPR48
 
 struct DSPS
 {
- sscpu_timestamp_t LastTS;
+ int32 LastTS;
  int32 CycleCounter;
  int32 T0_Until;
  //
@@ -230,6 +236,24 @@ static FORCE_INLINE void DSP_TailDispatch(DSPS* dsp)
 
  void (* const next)(DSPS*) = (void (*)(DSPS*))(DSP_INSTR_BASE_UIPT + (uintptr_t)(DSP_INSTR_RECOVER_TCAST)dsp->NextInstr);
  next(dsp);
+}
+
+static FORCE_INLINE void DSP_SetC(DSPS* dsp, bool value)
+{
+ dsp->FlagC = value;
+}
+
+static FORCE_INLINE void DSP_CalcZS32(DSPS* dsp, uint32 val)
+{
+ dsp->FlagS = (int32)val < 0;
+ dsp->FlagZ = !val;
+}
+
+static FORCE_INLINE void DSP_CalcZS48(DSPS* dsp, uint64 val)
+{
+ val <<= 16;
+ dsp->FlagS = (int64)val < 0;
+ dsp->FlagZ = !val;
 }
 
 template<unsigned cond>

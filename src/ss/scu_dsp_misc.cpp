@@ -63,7 +63,9 @@ static NO_INLINE NO_CLONE void MiscInstr(DSPS* dsp)
  DSP_TailDispatch(dsp);
 }
 
+namespace MDFN_IEN_SS {
 MDFN_HIDE extern void (*const DSP_MiscFuncTable[2][4])(DSPS*) =
 {
  #include "scu_dsp_misctab.inc"
 };
+}
