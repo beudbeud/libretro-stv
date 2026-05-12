@@ -681,7 +681,7 @@ static INLINE void SCU_RegRW_DB(uint32 A, uint32* DB)
 	 {
 	  if(DSP.State == 0)
 	  {
-	   ((void (*)(void))(DSP_INSTR_BASE_UIPT + (uintptr_t)(DSP_INSTR_RECOVER_TCAST)DSP.NextInstr))();
+	   ((void (*)(DSPS*))(DSP_INSTR_BASE_UIPT + (uintptr_t)(DSP_INSTR_RECOVER_TCAST)DSP.NextInstr))(&DSP);
 	   if(DSP.CycleCounter < -(DSP_EndCCSubVal / 2))	// Ugh
 	    DSP.CycleCounter += DSP_EndCCSubVal;
 	  }
@@ -1788,11 +1788,13 @@ sscpu_timestamp_t SCU_UpdateDSP(sscpu_timestamp_t timestamp)
  if(MDFN_UNLIKELY(!DSP.IsRunning()))
   return SS_EVENT_DISABLED_TS;
 
- while(MDFN_LIKELY(DSP.CycleCounter > 0))
  {
-  //printf("%02x %16llx\n", DSP.PC, DSP.NextInstr);
-  ((void (*)(void))(DSP_INSTR_BASE_UIPT + (uintptr_t)(DSP_INSTR_RECOVER_TCAST)DSP.NextInstr))();
-  DSP.CycleCounter -= 2;
+  DSPS* const dsp = &DSP;
+  // Threaded dispatch: the first handler tail-chains through the
+  // remaining cycles via DSP_TailDispatch and only returns once the
+  // budget is exhausted (or the DSP stopped).
+  if(MDFN_LIKELY(dsp->CycleCounter > 0))
+   ((void (*)(DSPS*))(DSP_INSTR_BASE_UIPT + (uintptr_t)(DSP_INSTR_RECOVER_TCAST)dsp->NextInstr))(dsp);
  }
 
  if(MDFN_UNLIKELY(!DSP.IsRunning()))
@@ -1888,47 +1890,43 @@ void DSP_FinishPRAMDMA(void)
 }
 
 template<bool looped, bool hold, bool format, bool dir, unsigned drw>
-static NO_INLINE NO_CLONE void DMAInstr(void)
+static NO_INLINE NO_CLONE void DMAInstr(DSPS* dsp)
 {
- const uint32 instr = DSP_InstrPre<looped>();
+ const uint32 instr = DSP_InstrPre<looped>(dsp);
  const unsigned add_mode = (instr >> 15) & 0x7;
  uint8 count;	// 0 = 256
 
- if(DSP.T0_Until < DSP.CycleCounter)
+ if(dsp->T0_Until < dsp->CycleCounter)
  {
   // TODO: Rework how DSP DMA is handled if this condition occurs with the same data RAM bank in any games.
-  if(format)
-   SS_DBG(SS_DBG_WARNING | SS_DBG_SCU_DSP, "[SCU] Executing DSP DMA instruction 0x%08x before previous DMA has finished!\n", instr);
-
-  DSP.CycleCounter = DSP.T0_Until &~ 1;
+  dsp->CycleCounter = dsp->T0_Until &~ 1;
  }
 
- DSP.T0_Until = DSP.CycleCounter;
+ dsp->T0_Until = dsp->CycleCounter;
 
  if(format)
  {
   const unsigned crw = instr & 0x3;
   const bool ctinc = instr & 0x4;
 
-  count = DSP.DataRAM[crw][DSP.CT[crw]] & 0xFF;
-  DSP.CT[crw] = (DSP.CT[crw] + ctinc) & 0x3F;
+  count = dsp->DataRAM[crw][dsp->CT[crw]] & 0xFF;
+  dsp->CT[crw] = (dsp->CT[crw] + ctinc) & 0x3F;
  }
  else
   count = instr & 0xFF;
 
- //printf("%02x %08x Count: %u\n", DSP.PC, instr, count);
- SS_DBG(SS_DBG_SCU_DSP, "[SCU] DSP DMA; looped=%u, add_mode=0x%01x, hold=%u, format=%u, dir=%u, drw=0x%02x -- count=%u, RAO<<2=0x%08x, WAO<<2=0x%08x\n", looped, add_mode, hold, format, dir, drw, count, DSP.RAO << 2, DSP.WAO << 2);
-
+ // do { } while(0) lets bus-error paths "break" out so we still
+ // fall through to DSP_TailDispatch at the end.
+ do {
  if(dir)
  {
   const uint32 addr_add_amount = (1 << add_mode) &~ 1;
-  uint32 addr = (DSP.WAO << 2) & 0x07FFFFFF;
+  uint32 addr = (dsp->WAO << 2) & 0x07FFFFFF;
   const int WriteBus = AddressToBus(addr);
 
   if(MDFN_UNLIKELY(WriteBus == -1))
   {
-   SS_DBG(SS_DBG_WARNING | SS_DBG_SCU | SS_DBG_SCU_DSP, "[SCU] Bad DSP DMA to 0x%08x --- Instr=0x%08x, Next_Instr=0x%08x, PC=0x%02x\n", addr, instr, (unsigned)(DSP.NextInstr >> 32), DSP.PC);
-   return;
+   break;
   }
 
   // Read from data RAM, write to external bus
@@ -1940,57 +1938,53 @@ static NO_INLINE NO_CLONE void DMAInstr(void)
     DB = 0xFFFFFFFF;
    else
    {
-    DB = DSP.DataRAM[drw][DSP.CT[drw]];
-    DSP.CT[drw] = (DSP.CT[drw] + 1) & 0x3F;
+    DB = dsp->DataRAM[drw][dsp->CT[drw]];
+    dsp->CT[drw] = (dsp->CT[drw] + 1) & 0x3F;
    }
 
    if(WriteBus == 2)
    {
     ne16_wbo_be<uint32>(WorkRAMH, addr & 0xFFFFC, DB);
     addr += addr_add_amount;
-    DSP.T0_Until -= 2;
+    dsp->T0_Until -= 2;
    }
    else if(WriteBus == 1)
    {
     uint16 DB16;
 
     DB16 = DB >> 16;
-    BBusRW_DB<uint16, true>(addr, &DB16, NULL, &DSP.T0_Until);
+    BBusRW_DB<uint16, true>(addr, &DB16, NULL, &dsp->T0_Until);
 
     addr += addr_add_amount;
 
     DB16 = DB;
-    BBusRW_DB<uint16, true, true>(addr, &DB16, NULL, &DSP.T0_Until);
+    BBusRW_DB<uint16, true, true>(addr, &DB16, NULL, &dsp->T0_Until);
 
     addr += addr_add_amount;
    }
    else if(WriteBus == 0)
    {
-    ABus_Write_DB32<uint32>(addr, DB, NULL, &DSP.T0_Until);
+    ABus_Write_DB32<uint32>(addr, DB, NULL, &dsp->T0_Until);
 
     addr += addr_add_amount;
    }
   } while(--count);
 
   if(!hold)
-   DSP.WAO = (addr + 2) >> 2;
+   dsp->WAO = (addr + 2) >> 2;
  }
  else
  {
   const uint32 addr_add_amount = (1 << (add_mode & 0x2)) &~ 1;
-  uint32 addr = (DSP.RAO << 2) & 0x07FFFFFF;
+  uint32 addr = (dsp->RAO << 2) & 0x07FFFFFF;
   const int ReadBus = AddressToBus(addr);
 
   if(MDFN_UNLIKELY(ReadBus == -1))
   {
-   SS_DBG(SS_DBG_WARNING | SS_DBG_SCU | SS_DBG_SCU_DSP, "[SCU] Bad DSP DMA from 0x%08x --- Instr=0x%08x, Next_Instr=0x%08x, PC=0x%02x\n", addr, instr, (unsigned)(DSP.NextInstr >> 32), DSP.PC);
-   return;
+   break;
   }
 
-  if(drw & 0x4)
-   SS_DBG(SS_DBG_WARNING | SS_DBG_SCU | SS_DBG_SCU_DSP, "[SCU] DSP DMA from 0x%08x to %s --- Instr=0x%08x, Next_Instr=0x%08x, PC=0x%02x\n", addr, ((drw == 0x4) ? "program RAM" : "unknown"), instr, (unsigned)(DSP.NextInstr >> 32), DSP.PC);
-
-  DSP.PRAMDMABufCount = 0;
+  dsp->PRAMDMABufCount = 0;
 
   // Read from external bus, write to data RAM or program RAM
   do
@@ -2000,7 +1994,7 @@ static NO_INLINE NO_CLONE void DMAInstr(void)
    if(ReadBus == 2)
    {
     DB = ne16_rbo_be<uint32>(WorkRAMH, addr & 0xFFFFF);
-    DSP.T0_Until -= 2;
+    dsp->T0_Until -= 2;
 
     addr += addr_add_amount;
    }
@@ -2008,17 +2002,17 @@ static NO_INLINE NO_CLONE void DMAInstr(void)
    {
     uint16 tmp = 0;
 
-    BBusRW_DB<uint16, false>(addr | 0, &tmp, NULL, &DSP.T0_Until);
+    BBusRW_DB<uint16, false>(addr | 0, &tmp, NULL, &dsp->T0_Until);
     DB = tmp << 16;
 
-    BBusRW_DB<uint16, false, true>(addr | 2, &tmp, NULL, &DSP.T0_Until);
+    BBusRW_DB<uint16, false, true>(addr | 2, &tmp, NULL, &dsp->T0_Until);
     DB |= tmp << 0;
 
     addr += 4;
    }
    else if(ReadBus == 0)
    {
-    DB = ABus_Read(addr, NULL, &DSP.T0_Until);
+    DB = ABus_Read(addr, NULL, &dsp->T0_Until);
 
     addr += addr_add_amount;
    }
@@ -2027,22 +2021,25 @@ static NO_INLINE NO_CLONE void DMAInstr(void)
    {
     if(!(drw & 0x3))
     {
-     DSP.PRAMDMABuf[DSP.PRAMDMABufCount++ & 0xFF] = DB;
+     dsp->PRAMDMABuf[dsp->PRAMDMABufCount++ & 0xFF] = DB;
     }
    }
    else
    {
-    DSP.DataRAM[drw][DSP.CT[drw]] = DB;
-    DSP.CT[drw] = (DSP.CT[drw] + 1) & 0x3F;
+    dsp->DataRAM[drw][dsp->CT[drw]] = DB;
+    dsp->CT[drw] = (dsp->CT[drw] + 1) & 0x3F;
    }
   } while(--count);
 
   if(!hold)
-   DSP.RAO = addr >> 2;
+   dsp->RAO = addr >> 2;
  }
+ } while(0);
+
+ DSP_TailDispatch(dsp);
 }
 
-MDFN_HIDE extern void (*const DSP_DMAFuncTable[2][8][8])(void) =
+MDFN_HIDE extern void (*const DSP_DMAFuncTable[2][8][8])(DSPS*) =
 {
  #include "scu_dsp_dmatab.inc"
 };

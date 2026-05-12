@@ -22,18 +22,12 @@
 #include "ss.h"
 #include "scu.h"
 
-#if defined(__GNUC__) && !defined(__clang__)
- #pragma GCC optimize("Os")
-#endif
-
-namespace MDFN_IEN_SS
-{
 #include "scu_dsp_common.inc"
 
 template<bool looped, unsigned dest, unsigned cond>
-static NO_INLINE NO_CLONE void MVIInstr(void)
+static NO_INLINE NO_CLONE void MVIInstr(DSPS* dsp)
 {
- const uint32 instr = DSP_InstrPre<looped>();
+ const uint32 instr = DSP_InstrPre<looped>(dsp);
  uint32 imm;
 
  if(cond & 0x40)
@@ -41,11 +35,11 @@ static NO_INLINE NO_CLONE void MVIInstr(void)
  else
   imm = sign_x_to_s32(25, instr);
 
- if(DSP_TestCond<cond>())
+ if(DSP_TestCond<cond>(dsp))
  {
-  if(DSP.PRAMDMABufCount && (dest == 0x6 || dest == 0x7))
+  if(dsp->PRAMDMABufCount && (dest == 0x6 || dest == 0x7))
   {
-   DSP.PC--;
+   dsp->PC--;
    //
    DSP_FinishPRAMDMA();
   }
@@ -53,42 +47,40 @@ static NO_INLINE NO_CLONE void MVIInstr(void)
   switch(dest)
   {
    default:
-	SS_DBG(SS_DBG_WARNING | SS_DBG_SCU, "[SCU] MVI unknown dest 0x%01x --- Instr=0x%08x, Next_Instr=0x%08x, PC=0x%02x\n", dest, instr, (unsigned)(DSP.NextInstr >> 32), DSP.PC);
 	break;
 
    case 0x0:
    case 0x1:
    case 0x2:
    case 0x3:
-	DSP.DataRAM[dest][DSP.CT[dest]] = imm;
-	DSP.CT[dest] = (DSP.CT[dest] + 1) & 0x3F;
+	dsp->DataRAM[dest][dsp->CT[dest]] = imm;
+	dsp->CT[dest] = (dsp->CT[dest] + 1) & 0x3F;
 	break;
 
-   case 0x4: DSP.RX = imm; break;
-   case 0x5: DSP.P.T = (int32)imm; break;
+   case 0x4: dsp->RX = imm; break;
+   case 0x5: dsp->P.T = (int32)imm; break;
 
-   case 0x6: DSP.RAO = imm; break;
+   case 0x6: dsp->RAO = imm; break;
 
-   case 0x7: DSP.WAO = imm; break;
- 
-   case 0xA: if(!looped || DSP.LOP == 0x0FFF) { DSP.LOP = imm & 0x0FFF; } break;
+   case 0x7: dsp->WAO = imm; break;
+
+   case 0xA: if(!looped || dsp->LOP == 0x0FFF) { dsp->LOP = imm & 0x0FFF; } break;
 
    case 0xC:
-	DSP.TOP = DSP.PC - 1;
-	DSP.PC = imm & 0xFF;
+	dsp->TOP = dsp->PC - 1;
+	dsp->PC = imm & 0xFF;
         //
-	if(DSP.PRAMDMABufCount)
+	if(dsp->PRAMDMABufCount)
 	 DSP_FinishPRAMDMA();
 	break;
   }
  }
+
+ DSP_TailDispatch(dsp);
 }
 
 
-MDFN_HIDE extern void (*const DSP_MVIFuncTable[2][16][128])(void) =
+MDFN_HIDE extern void (*const DSP_MVIFuncTable[2][16][128])(DSPS*) =
 {
  #include "scu_dsp_mvitab.inc"
 };
-
-}
-

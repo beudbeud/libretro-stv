@@ -267,10 +267,71 @@ class SS_SCSP
  uint8 RBP;
  uint8 RBL;
  void RunDSP(void);
+ void DecodeMPROG(void);
+
+ struct DSPStep
+ {
+  uint8 IRA;	// 6 bits
+  uint8 IWA;	// 5 bits
+  uint8 EWA;	// 4 bits
+  uint8 MASA;	// 5 bits
+  uint8 CRA;	// 6 bits
+  uint8 TWA;	// 7 bits, MDEC_CT added at runtime
+  uint8 TRA;	// 7 bits, MDEC_CT added at runtime
+  uint8 YSEL;	// 2 bits
+  uint32 flags;	// see DSPF_*
+  uint8 hazard_next;	// bit 0: step N+1 RAW-depends on step N
+  uint8 reads;	// DSPR_* bitmask of carried state this step consumes
+  uint8 writes;	// DSPW_* bitmask of carried state this step produces
+  uint8 live;	// 0 = dead step, RunDSP skips it
+ };
+
+ enum
+ {
+  DSPF_NXADDR = 1u <<  0,
+  DSPF_ADRGB  = 1u <<  1,
+  DSPF_NOFL   = 1u <<  2,
+  DSPF_BSEL   = 1u <<  3,
+  DSPF_ZERO   = 1u <<  4,
+  DSPF_NEGB   = 1u <<  5,
+  DSPF_YRL    = 1u <<  6,
+  DSPF_SHFT0  = 1u <<  7,
+  DSPF_SHFT1  = 1u <<  8,
+  DSPF_FRCL   = 1u <<  9,
+  DSPF_ADRL   = 1u << 10,
+  DSPF_EWT    = 1u << 11,
+  DSPF_MRT    = 1u << 12,
+  DSPF_MWT    = 1u << 13,
+  DSPF_TABLE  = 1u << 14,
+  DSPF_IWT    = 1u << 15,
+  DSPF_XSEL   = 1u << 16,
+  DSPF_TWT    = 1u << 17
+ };
+
+ // Carried-state read/write bitmasks.
+ enum
+ {
+  DSPR_SFT  = 1u << 0,
+  DSPR_FRC  = 1u << 1,
+  DSPR_Y    = 1u << 2,
+  DSPR_ADRS = 1u << 3,
+  DSPR_TEMP = 1u << 4,
+  DSPR_MEMS = 1u << 5,
+
+  DSPW_SFT   = 1u << 0,
+  DSPW_FRC   = 1u << 1,
+  DSPW_Y     = 1u << 2,
+  DSPW_ADRS  = 1u << 3,
+  DSPW_TEMP  = 1u << 4,
+  DSPW_MEMS  = 1u << 5,
+  DSPW_EFREG = 1u << 6,
+  DSPW_RAM   = 1u << 7
+ };
 
  struct DSPS
  {
   uint64 MPROG[0x80];
+  DSPStep MPROG_Decoded[0x80];
   uint32 TEMP[0x80];	// 24 bit
   uint32 MEMS[0x20];	// 24 bit
   uint16 COEF[64];	// 13 bit
