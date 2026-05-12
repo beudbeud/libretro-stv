@@ -1116,8 +1116,7 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
   if(TVMR & TVMR_8BPP)
    ret = true;
 
-  for(unsigned i = 0; MDFN_LIKELY(i < w); i++)
-   buf[i] = fbyptr[i];
+  memcpy(buf, fbyptr, (size_t)w * sizeof(uint16));
  }
 
  //
