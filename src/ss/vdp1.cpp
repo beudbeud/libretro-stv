@@ -1109,7 +1109,13 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  //
  //
  //
- if(EraseYCounter <= EraseParams.y_end)
+ /* With VDP1INSTANT, the draw buffer is fully cleared by fill_n at swap
+  * time and on every PTMR restart, so no incremental erase is needed.
+  * More importantly, EraseYCounter starts at EraseParams.y_start (not at
+  * the current scanline), so when y_start > 0 it runs ahead of VDP2:
+  * GetLine(0) would erase row y_start before VDP2 reads it, producing
+  * transparent stripes in the middle of fast-moving sprites/polygons. */
+ if(!(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) && EraseYCounter <= EraseParams.y_end)
  {
   uint16* fbyptr;
   uint32 x = EraseParams.x_start;
@@ -1122,8 +1128,6 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
   {
    for(unsigned sub = 0; sub < 2; sub++)
    {
-    //printf("%d %d:%d %04x\n", FBDrawWhich, x, y, fill_data);
-    //printf("%lld\n", &fbyptr[x & fb_x_mask] - FB[!FBDrawWhich]);
     fbyptr[x & EraseParams.fb_x_mask] = EraseParams.fill_data;
     x++;
    }
