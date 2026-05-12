@@ -40,6 +40,7 @@
 // that erase bounds are always current when the incremental per-line erase runs.
 
 #include "ss.h"
+#include <algorithm>
 #include <mednafen/mednafen.h>
 #include <mednafen/FileStream.h>
 #include "scu.h"
@@ -1014,30 +1015,16 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
     EraseParams.fill_data = EWDR;
     //
 
-    /* VDP1INSTANT: force-erase the (freshly swapped) draw buffer before drawing.
-     * The incremental EraseYCounter erase (one row per GetLine call) may not
-     * finish all rows in one frame, leaving stale sprite pixels that cause
-     * stripes when sprites translate.  The FBVBEraseActive path (TVMR_VBE /
-     * rotation mode) already ran pre-swap above and covered the same buffer,
-     * so we only need this for games that do not set those bits. */
-    if((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
-       && EraseParams.x_bound > EraseParams.x_start
-       && EraseParams.y_start <= EraseParams.y_end)
-    {
-     uint32 fy = EraseParams.y_start;
-     do
-     {
-      uint16* fbyptr = &FB[FBDrawWhich][(fy & 0xFF) << 9];
-      if(EraseParams.rot8)
-       fbyptr += (fy & 0x100);
-      uint32 fx = EraseParams.x_start;
-      do
-      {
-       for(unsigned sub = 0; sub < 8; sub++, fx++)
-        fbyptr[fx & EraseParams.fb_x_mask] = EraseParams.fill_data;
-      } while(fx < EraseParams.x_bound);
-     } while(++fy <= EraseParams.y_end);
-    }
+    /* VDP1INSTANT: force-erase the entire draw buffer before drawing.
+     * Sprites can extend outside EWLR/EWRR bounds and the incremental
+     * EraseYCounter erase may be incomplete, both leaving stale pixels
+     * that cause stripes on fast-moving sprites/polygons.  A full-buffer
+     * clear is unconditional so degenerate EraseParams (EWRR not set)
+     * cannot silently skip the erase.  VDP1INSTANT is only applied to
+     * games (fighters, action titles) that redraw the full screen every
+     * frame, so clearing the entire 512×256 buffer is always safe. */
+    if(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
+     std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
 
     if(PTMR & 0x2)	// Start drawing(but only if we swapped the frame)
     {
@@ -1200,26 +1187,7 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	   * this PTMR write, leaving very few stale pixels; with VDP1INSTANT the auto
 	   * pass always completes, so we must wipe the buffer ourselves.
 	   * Guard against degenerate EraseParams (x_bound==0 or empty y range). */
-	  if(EraseParams.x_bound > EraseParams.x_start && EraseParams.y_start <= EraseParams.y_end)
-	  {
-	   uint32 ey = EraseParams.y_start;
-	   do
-	   {
-	    uint16* fbyptr;
-	    uint32 ex = EraseParams.x_start;
-	    fbyptr = &FB[FBDrawWhich][(ey & 0xFF) << 9];
-	    if(EraseParams.rot8)
-	     fbyptr += (ey & 0x100);
-	    do
-	    {
-	     for(unsigned sub = 0; sub < 8; sub++)
-	     {
-	      fbyptr[ex & EraseParams.fb_x_mask] = EraseParams.fill_data;
-	      ex++;
-	     }
-	    } while(ex < EraseParams.x_bound);
-	   } while(++ey <= EraseParams.y_end);
-	  }
+	  std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
 	 }
 	 StartDrawing();
 	 nt = SH7095_mem_timestamp + 1;
