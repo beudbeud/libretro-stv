@@ -10,8 +10,9 @@ add_library(mednafen_stv_libretro SHARED
 target_include_directories(mednafen_stv_libretro BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/libretro/wrapper_include
     ${CMAKE_BINARY_DIR}
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/minilzo
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/mednafen
+    ${CMAKE_SOURCE_DIR}/mednafen/minilzo
 )
 
 target_compile_options(mednafen_stv_libretro PRIVATE

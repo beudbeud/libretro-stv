@@ -1,4 +1,4 @@
-# src/CMakeLists.txt — mednafen core for libretro build
+# mednafen/CMakeLists.txt — mednafen core for libretro build
 
 # ── Source collection ─────────────────────────────────────────────────────────
 file(GLOB MDFN_CORE_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
@@ -80,8 +80,9 @@ set_source_files_properties(ss/cart/stv.cpp PROPERTIES COMPILE_FLAGS "-fPIC")
 target_include_directories(mdfn_core BEFORE PUBLIC
     ${CMAKE_SOURCE_DIR}/libretro/wrapper_include  # intercepts <endian.h>
     ${CMAKE_BINARY_DIR}                            # <config.h>
-    ${CMAKE_SOURCE_DIR}/src                        # <trio/trio.h>, <mednafen/X.h> via proxy
-    ${CMAKE_SOURCE_DIR}/src/minilzo                # internal minilzo headers
+    ${CMAKE_SOURCE_DIR}                            # <mednafen/X.h> resolves to mednafen/X.h
+    ${CMAKE_SOURCE_DIR}/mednafen                   # <trio/trio.h>, bare headers
+    ${CMAKE_SOURCE_DIR}/mednafen/minilzo           # internal minilzo headers
 )
 
 target_compile_options(mdfn_core PUBLIC
