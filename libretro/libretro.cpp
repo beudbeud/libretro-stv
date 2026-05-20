@@ -21,6 +21,7 @@
 #include "git.h"
 #include "MemoryStream.h"
 #include "video/surface.h"
+#include "video/Deinterlacer.h"
 
 #include "ss/ss.h"
 #include "ss/vdp1_common.h"
@@ -69,6 +70,15 @@ enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
 static int g_frameskip_type     = FS_NONE;
 static int g_frameskip_interval = 1;
 static int g_frameskip_counter  = 0;
+
+/* ── Deinterlacer ──────────────────────────────────────────────────────────── */
+/* Sentinel for "renderer-side bob" (VDP2::SetDeinterlaceOff(true)) — bypasses
+ * the SW Deinterlacer. Any other value is a real Deinterlacer enum constant
+ * (DEINT_BOB, DEINT_WEAVE, etc.). */
+static constexpr unsigned DEINT_OFF_SENTINEL = ~0u;
+static Deinterlacer* g_deint      = nullptr;
+static unsigned      g_deint_type = DEINT_OFF_SENTINEL;
+static bool          g_prev_interlaced = false;
 
 /* ── Logger ────────────────────────────────────────────────────────────────── */
 static void lr_log(retro_log_level lvl, const char *fmt, ...)
@@ -273,6 +283,9 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_frameskip", "Frameskip", NULL,
       "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
       { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
+      "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
+      { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
 static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
@@ -328,6 +341,32 @@ static void apply_options()
             if(g_frameskip_interval > 5) g_frameskip_interval = 5;
         }
         g_frameskip_counter = 0;
+    }
+
+    /* Deinterlacer: "off" = renderer-side bob (VDP2 mirrors each scanline
+     * onto the opposite-field row at draw time); other values pick a SW
+     * Deinterlacer post-processor invoked after MDFNI_Emulate.
+     *
+     * Default ("off" / unknown value) is the renderer-side bob. */
+    var.key = "mednafen_stv_deinterlacer";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        unsigned new_type = DEINT_OFF_SENTINEL;
+        bool use_renderer_bob = true;
+
+        if     (!strcmp(var.value, "weave"))      { new_type = Deinterlacer::DEINT_WEAVE;      use_renderer_bob = false; }
+        else if(!strcmp(var.value, "bob"))        { new_type = Deinterlacer::DEINT_BOB;        use_renderer_bob = false; }
+        else if(!strcmp(var.value, "bob_offset")) { new_type = Deinterlacer::DEINT_BOB_OFFSET; use_renderer_bob = false; }
+        else if(!strcmp(var.value, "blend"))      { new_type = Deinterlacer::DEINT_BLEND;      use_renderer_bob = false; }
+        else if(!strcmp(var.value, "blend_rg"))   { new_type = Deinterlacer::DEINT_BLEND_RG;   use_renderer_bob = false; }
+
+        MDFN_IEN_SS::VDP2::SetDeinterlaceOff(use_renderer_bob);
+
+        if(new_type != g_deint_type) {
+            delete g_deint;
+            g_deint = use_renderer_bob ? nullptr : Deinterlacer::Create(new_type);
+            g_deint_type = new_type;
+            g_prev_interlaced = false; /* force ClearState on next interlaced frame */
+        }
     }
 }
 
@@ -438,6 +477,9 @@ RETRO_API void retro_deinit(void)
     MDFNI_Kill();
     delete surf;          surf = nullptr;
     delete[] line_widths; line_widths = nullptr;
+    delete g_deint;       g_deint = nullptr;
+    g_deint_type = DEINT_OFF_SENTINEL;
+    g_prev_interlaced = false;
     initialized = false;
 }
 
@@ -455,6 +497,15 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
      * but mednafen may store this pointer for use during Emulate(). */
     game_info = MDFNI_LoadGame("ss", &NVFS, game->path);
     if(!game_info) { lr_log(RETRO_LOG_ERROR,"Load failed: %s\n",game->path); return false; }
+
+    /* Re-apply options now that the renderer is up. The first call (above)
+     * wrote MDFNI_SetSetting entries that MDFNI_LoadGame needed to read; it
+     * also enqueued VDP2REND commands, but VDP2REND_Init (called during
+     * LoadGame) re-initialises its command queue and resets DeinterlaceOff,
+     * so any VDP2-thread options applied before LoadGame are discarded.
+     * Re-applying here is idempotent for the MDFNI_SetSetting half and
+     * correctly takes effect for the VDP2 half. */
+    apply_options();
 
     /* Initialize ALL ports declared by the SS module (0..N-1).
      * ST-V has 13 ports (port12 = "builtin"). Without initializing all
@@ -666,6 +717,23 @@ RETRO_API void retro_run(void)
 
     MDFNI_Emulate(&espec);
 
+    /* Deinterlace handling. Both paths yield a progressive full-height surface
+     * — clear InterlaceOn either way so the geometry/video_cb code below sees
+     * a single coherent state.
+     *   - SW mode (g_deint != null): Process fills the opposite-field rows.
+     *   - "Off" mode (g_deint == null): VDP2::SetDeinterlaceOff was set to
+     *     true; the renderer already mirrored each scanline at draw time. */
+    if(espec.InterlaceOn) {
+        if(g_deint) {
+            if(!g_prev_interlaced) g_deint->ClearState();
+            g_deint->Process(espec.surface, espec.DisplayRect, espec.LineWidths, espec.InterlaceField);
+        }
+        g_prev_interlaced = true;
+        espec.InterlaceOn = false;
+    } else {
+        g_prev_interlaced = false;
+    }
+
     /* Video */
     if(skip_frame) {
         video_cb(NULL, g_last_w > 0 ? g_last_w : 320,
@@ -683,10 +751,10 @@ RETRO_API void retro_run(void)
         /* Clamp garbage transition frames (e.g. 4x224 during VDP2 mode switch). */
         if(dw < 64) dw = (g_last_w >= 64) ? g_last_w : 320;
 
-        /* Interlaced: DisplayRect.h = full frame (e.g. 480). For geometry/SwitchRes
-         * we report the field height (240) — the actual scanline count on the CRT.
-         * video_cb still gets the full height so the deinterlacer can work.       */
-        int display_h = espec.InterlaceOn ? dh / 2 : dh;
+        /* Both deinterlace paths (renderer-side bob and SW Process) produce a
+         * progressive full-height surface — InterlaceOn was cleared above —
+         * so dh is the displayable height directly. */
+        int display_h = dh;
 
         /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
         if(dw != g_last_w || display_h != g_last_h) {

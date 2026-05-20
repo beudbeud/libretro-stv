@@ -47,6 +47,13 @@ static bool PAL;
 static bool CorrectAspect;
 static bool ShowHOverscan;
 static bool DoHBlend;
+// In-renderer bob: when set, each drawn scanline is also memcpy'd to its
+// opposite-field row of the surface, producing a stable full-resolution
+// progressive image when InterlaceOn. Set via VDP2REND_SetDeinterlaceOff;
+// pairs with libretro option "deinterlacer = off" (renderer-side bob, no
+// SW deinterlacer post-processing). Independent of the SW Deinterlacer
+// classes in mednafen/video/.
+static bool DeinterlaceOff;
 static int LineVisFirst, LineVisLast;
 static uint32 NextOutLine;
 static bool Clock28M;
@@ -3220,6 +3227,26 @@ static NO_INLINE void DrawLine(const uint16 out_line, const uint16 vdp2_line, co
   // Kind of late, but meh. ;p
   assert((espec->DisplayRect.x + espec->LineWidths[out_line]) <= 704);
  }
+
+ // In-renderer bob (paired with the libretro "off" deinterlacer option):
+ // duplicate the just-rendered scanline onto the opposite-field row so the
+ // final surface contains both fields filled with the current frame's data.
+ // The SW Deinterlacer is bypassed in this mode -- the frontend sees a
+ // progressive full-height frame every emulated frame.
+ if(MDFN_UNLIKELY(DeinterlaceOff) && espec->InterlaceOn)
+ {
+  const int32 mirror_line = (int32)out_line ^ 1;
+  const int32 rect_end = espec->DisplayRect.y + espec->DisplayRect.h;
+  if(mirror_line >= espec->DisplayRect.y && mirror_line < rect_end)
+  {
+   const size_t col_off = (size_t)espec->DisplayRect.x;
+   const size_t copy_pix = (size_t)espec->LineWidths[out_line];
+   const uint32* src_row = espec->surface->pixels + out_line    * espec->surface->pitchinpix + col_off;
+   uint32*       dst_row = espec->surface->pixels + mirror_line * espec->surface->pitchinpix + col_off;
+   memcpy(dst_row, src_row, copy_pix * sizeof(uint32));
+   espec->LineWidths[mirror_line] = espec->LineWidths[out_line];
+  }
+ }
 }
 
 //
@@ -3235,6 +3262,7 @@ enum
  COMMAND_DRAW_LINE,
 
  COMMAND_SET_LEM,
+ COMMAND_SET_DEINTOFF,
 
  COMMAND_SET_BUSYWAIT,
 
@@ -3328,6 +3356,10 @@ static int RThreadEntry(void* data)
 	UserLayerEnableMask = wqe->Arg32;
 	break;
 
+   case COMMAND_SET_DEINTOFF:
+	DeinterlaceOff = (bool)wqe->Arg32;
+	break;
+
    case COMMAND_SET_BUSYWAIT:
 	DoBusyWait = wqe->Arg32;
 	break;
@@ -3358,6 +3390,7 @@ void VDP2REND_Init(const bool IsPAL, const uint64 affinity)
  VisibleLines = PAL ? 288 : 240;
  //
  UserLayerEnableMask = ~0U;
+ DeinterlaceOff = false;
  Clock28M = false;
  //
  WQ_ReadPos = 0;
@@ -3546,6 +3579,11 @@ void VDP2REND_Reset(bool powering_up)
 void VDP2REND_SetLayerEnableMask(uint64 mask)
 {
  WWQ(COMMAND_SET_LEM, mask);
+}
+
+void VDP2REND_SetDeinterlaceOff(bool off)
+{
+ WWQ(COMMAND_SET_DEINTOFF, (uint32)off);
 }
 
 void VDP2REND_Write8_DB(uint32 A, uint16 DB)
