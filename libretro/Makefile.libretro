@@ -5,6 +5,7 @@ TARGET_NAME := mednafen_stv
 CORE_DIR    := $(CURDIR)
 BUILD_DIR   := $(CORE_DIR)/build_libretro
 
+CC  := $(TARGET_CROSS)gcc
 CXX := $(TARGET_CROSS)g++
 AR  := $(TARGET_CROSS)ar
 
@@ -38,6 +39,14 @@ CXXFLAGS := \
     $(DEFINES) $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
+CFLAGS := \
+    -O3 -fsigned-char -fwrapv \
+    -fno-fast-math -fno-unsafe-math-optimizations \
+    -fstrict-aliasing -fPIC -fvisibility=hidden \
+    -DHAVE_CONFIG_H \
+    $(INCLUDES) \
+    -include $(BUILD_DIR)/config.h
+
 ifneq ($(filter aarch64%,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
   CXXFLAGS += -mcpu=cortex-a76
 endif
@@ -66,11 +75,43 @@ CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_cpu/z80-fuse/*.cpp)
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_misc/*.cpp)
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_sound/*.cpp)
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_video/*.cpp)
+
+# Standalone driver sources
 CORE_SRCS := $(filter-out $(CORE_DIR)/mednafen/drivers/%, $(CORE_SRCS))
+# Windows-only sources
+CORE_SRCS := $(filter-out %win32-common.cpp %_Win32.cpp %_win32.cpp, $(CORE_SRCS))
+# Test / record-only sources
+CORE_SRCS := $(filter-out \
+    $(CORE_DIR)/mednafen/tests.cpp \
+    $(CORE_DIR)/mednafen/testsexp.cpp \
+    $(CORE_DIR)/mednafen/qtrecord.cpp \
+    $(CORE_DIR)/mednafen/sound/okiadpcm_generate.cpp, $(CORE_SRCS))
+# CD audio decoders needing optional libs (mpc/vorbis/flac) — use stubs instead
+CORE_SRCS := $(filter-out \
+    $(CORE_DIR)/mednafen/cdrom/CDAFReader_MPC.cpp \
+    $(CORE_DIR)/mednafen/cdrom/CDAFReader_Vorbis.cpp \
+    $(CORE_DIR)/mednafen/cdrom/CDAFReader_FLAC.cpp, $(CORE_SRCS))
+
+# POSIX-specific sources not picked up by the globs above
+CORE_SRCS += \
+    $(CORE_DIR)/mednafen/net/Net.cpp \
+    $(CORE_DIR)/mednafen/net/Net_POSIX.cpp \
+    $(CORE_DIR)/mednafen/mthreading/MThreading_POSIX.cpp
 
 LIBRETRO_SRCS := $(CORE_DIR)/libretro/libretro.cpp
-ALL_SRCS := $(LIBRETRO_SRCS) $(CORE_SRCS)
-OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_SRCS))
+ALL_CXX_SRCS  := $(LIBRETRO_SRCS) $(CORE_SRCS)
+
+# C sources (not picked up by *.cpp globs)
+CORE_C_SRCS := \
+    $(CORE_DIR)/mednafen/minilzo/minilzo.c \
+    $(CORE_DIR)/mednafen/resampler/resample.c \
+    $(CORE_DIR)/mednafen/trio/trio.c \
+    $(CORE_DIR)/mednafen/trio/trionan.c \
+    $(CORE_DIR)/mednafen/trio/triostr.c
+
+OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_CXX_SRCS)) \
+        $(patsubst $(CORE_DIR)/%.c,$(BUILD_DIR)/%.o,$(CORE_C_SRCS))
+
 TARGET := $(CORE_DIR)/$(TARGET_NAME)_libretro.so
 
 .PHONY: all clean
@@ -84,6 +125,10 @@ $(TARGET): $(OBJS)
 $(BUILD_DIR)/%.o: $(CORE_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/%.o: $(CORE_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
