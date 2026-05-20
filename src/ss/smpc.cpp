@@ -369,9 +369,21 @@ static void RTC_Reset(void)
 
 void SMPC_LoadNV(Stream* s)
 {
- RTC.Valid = s->get_u8();
- s->read(RTC.raw, sizeof(RTC.raw));
- s->read(SaveMem, sizeof(SaveMem));
+ // On short read, fall back to defaults so the BIOS doesn't boot with
+ // a half-read RTC + stack garbage in the unread tail.
+ uint8 valid_byte = 0;
+
+ if(s->read(&valid_byte, 1, false)              != 1
+    || s->read(RTC.raw, sizeof(RTC.raw), false) != sizeof(RTC.raw)
+    || s->read(SaveMem, sizeof(SaveMem), false) != sizeof(SaveMem))
+ {
+  RTC.Valid = false;
+  memset(RTC.raw, 0, sizeof(RTC.raw));
+  memset(SaveMem, 0, sizeof(SaveMem));
+  return;
+ }
+
+ RTC.Valid = valid_byte;
 }
 
 void SMPC_SaveNV(Stream* s)
