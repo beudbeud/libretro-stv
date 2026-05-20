@@ -39,8 +39,36 @@ jobs:
           name: mednafen_stv_libretro_linux_${{ matrix.arch }}
           path: mednafen_stv_libretro_linux_${{ matrix.arch }}.so
 
+  build-android:
+    strategy:
+      matrix:
+        include:
+          - abi: arm64-v8a
+            platform: android-arm64
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          make -f libretro/Makefile.libretro \
+               platform=${{ matrix.platform }} \
+               -j$(nproc)
+
+      - name: Rename artifact
+        run: |
+          mv mednafen_stv_libretro.so \
+             mednafen_stv_libretro_android_${{ matrix.abi }}.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mednafen_stv_libretro_android_${{ matrix.abi }}
+          path: mednafen_stv_libretro_android_${{ matrix.abi }}.so
+
   upload:
-    needs: build
+    needs: [build, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -53,4 +81,4 @@ jobs:
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         with:
-          files: mednafen_stv_libretro_linux_*.so
+          files: mednafen_stv_libretro_*.so
