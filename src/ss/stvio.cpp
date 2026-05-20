@@ -351,7 +351,10 @@ void STVIO_LoadNV(Stream* s)
 {
  uint8 tmp[0x80];
 
- s->read(tmp, sizeof(tmp));
+ // On short read, leave the EEPROM at the virgin all-FF state set by
+ // AK93C45::Init(); writing stack garbage would corrupt cabinet config.
+ if(s->read(tmp, sizeof(tmp), false) != sizeof(tmp))
+  return;
 
  for(unsigned addr = 0; addr < 0x40; addr++)
   eep.PokeMem(addr, MDFN_de16msb(tmp + (addr << 1)));

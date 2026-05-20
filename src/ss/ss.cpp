@@ -1918,7 +1918,18 @@ static MDFN_COLD void LoadBackupRAM(void)
 {
  FileStream brs(MDFN_MakeFName(MDFNMKF_SAV, 0, "bkr"), FileStream::MODE_READ);
 
- brs.read(BackupRAM, sizeof(BackupRAM));
+ // On short read, fall back to factory defaults so the game still boots
+ // instead of throwing "Unexpected EOF" and aborting game load.
+ if(brs.read(BackupRAM, sizeof(BackupRAM), false) != sizeof(BackupRAM))
+ {
+  memset(BackupRAM, 0x00, sizeof(BackupRAM));
+  if(ActiveCartType != CART_STV)
+  {
+   for(unsigned i = 0; i < 0x40; i++)
+    BackupRAM[i] = BRAM_Init_Data[i & 0x0F];
+  }
+  MDFND_OutputNotice(MDFN_NOTICE_ERROR, "BackupRAM save file is truncated; falling back to factory-default contents.");
+ }
 }
 
 static MDFN_COLD void BackupBackupRAM(void)
@@ -1953,10 +1964,16 @@ static MDFN_COLD void LoadCartNV(void)
   //FileStream nvs(MDFN_MakeFName(MDFNMKF_SAV, 0, ext), FileStream::MODE_READ);
   GZFileStream nvs(MDFN_MakeFName(MDFNMKF_SAV, 0, ext), GZFileStream::MODE::READ);
 
-  nvs.read(nv_ptr, nv_size);
+  // On short read, zero-fill instead of aborting game load.
+  if(nvs.read(nv_ptr, nv_size, false) != nv_size)
+  {
+   memset(nv_ptr, 0, nv_size);
+   MDFND_OutputNotice(MDFN_NOTICE_ERROR, "Cart NV save file is truncated; falling back to zero-filled contents.");
+   return;
+  }
 
   if(nv16)
-  {  
+  {
    for(uint64 i = 0; i < nv_size; i += 2)
    {
     void* p = (uint8*)nv_ptr + i;
