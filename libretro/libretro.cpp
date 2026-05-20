@@ -532,37 +532,52 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
 
     /* Memory map — exposes Saturn bus regions so RetroArch's NCI
      * READ_CORE_MEMORY / RetroAchievements can inspect them.
+     * All descriptors use the default (blank) addrspace so a plain
+     * hex bus address (e.g. "06000000") finds them directly.
      * Storage is uint16 host-byte-order; the BIGENDIAN flag tells the
-     * frontend the underlying system bus is big-endian so byte addresses
-     * are byte-swapped on LE hosts. */
+     * frontend the underlying Saturn bus is big-endian, so byte reads
+     * on LE hosts see byte-swapped 16-bit words. */
     {
         using namespace MDFN_IEN_SS;
         static retro_memory_descriptor desc[] = {
+            /* SH-2 work RAM, low half (CS0/A-bus) */
             { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0x00200000, 0, 0, 0x100000, "WRAML"  },
-            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0x06000000, 0, 0, 0x100000, "WRAMH"  },
-            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0x05C00000, 0, 0, 0x80000,  "V1VRAM" },
-            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0x05E00000, 0, 0, 0x80000,  "V2VRAM" },
-            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0x05F00000, 0, 0, 0x1000,   "V2CRAM" },
-            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0, 0, 0, 0x40000, "V1FB0" },
-            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0, 0, 0, 0x40000, "V1FB1" },
+              nullptr, 0, 0x00200000, 0, 0, 0x100000, nullptr },
+            /* Internal SMPC Backup RAM (real bus has open-bus on odd
+             * bytes; we expose 32 KB contiguous for debug). */
             { RETRO_MEMDESC_SAVE_RAM   | RETRO_MEMDESC_BIGENDIAN,
-              nullptr, 0, 0, 0, 0, 0x8000,  "BUP"   },
+              nullptr, 0, 0x00180000, 0, 0, 0x8000,   nullptr },
+            /* VDP1 VRAM (512 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05C00000, 0, 0, 0x80000,  nullptr },
+            /* VDP1 framebuffer 0 — real bus addr of the display FB
+             * region. Note: VDP1 swaps which FB is bus-visible; this
+             * descriptor always shows FB[0]. */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05C80000, 0, 0, 0x40000,  nullptr },
+            /* VDP1 framebuffer 1 — placed in unused bus region just
+             * after the real FB (0x05CC0000-0x05D7FFFF is open bus
+             * on a real Saturn). */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05CC0000, 0, 0, 0x40000,  nullptr },
+            /* VDP2 VRAM (512 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05E00000, 0, 0, 0x80000,  nullptr },
+            /* VDP2 CRAM (palette, 4 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05F00000, 0, 0, 0x1000,   nullptr },
+            /* SH-2 work RAM, high half (CS3/B-bus) — main work RAM */
+            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x06000000, 0, 0, 0x100000, nullptr },
         };
         desc[0].ptr = SS_GetWorkRAML();
-        desc[1].ptr = SS_GetWorkRAMH();
+        desc[1].ptr = SS_GetBackupRAM();
         desc[2].ptr = VDP1::VRAM;
-        desc[3].ptr = VDP2::GetVRAM();
-        desc[4].ptr = VDP2::GetCRAM();
-        desc[5].ptr = VDP1::FB[0];
-        desc[6].ptr = VDP1::FB[1];
-        desc[7].ptr = SS_GetBackupRAM();
+        desc[3].ptr = VDP1::FB[0];
+        desc[4].ptr = VDP1::FB[1];
+        desc[5].ptr = VDP2::GetVRAM();
+        desc[6].ptr = VDP2::GetCRAM();
+        desc[7].ptr = SS_GetWorkRAMH();
 
         retro_memory_map mmap = { desc, (unsigned)(sizeof(desc) / sizeof(desc[0])) };
         environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
