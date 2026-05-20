@@ -1,13 +1,55 @@
 # Makefile.libretro — build mednafen_stv_libretro.so
-# Usage: make -f libretro/Makefile.libretro TARGET_CROSS=aarch64-buildroot-linux-gnu-
+# Usage:
+#   Linux:          make -f libretro/Makefile.libretro [TARGET_CROSS=aarch64-buildroot-linux-gnu-]
+#   Android arm64:  make -f libretro/Makefile.libretro platform=android-arm64  ANDROID_NDK_ROOT=/path/to/ndk
+#   Android armv7:  make -f libretro/Makefile.libretro platform=android-armv7  ANDROID_NDK_ROOT=/path/to/ndk
+#   Android x86_64: make -f libretro/Makefile.libretro platform=android-x86_64 ANDROID_NDK_ROOT=/path/to/ndk
+#   Android x86:    make -f libretro/Makefile.libretro platform=android-x86    ANDROID_NDK_ROOT=/path/to/ndk
 
 TARGET_NAME := mednafen_stv
 CORE_DIR    := $(CURDIR)
 BUILD_DIR   := $(CORE_DIR)/build_libretro
 
-CC  := $(TARGET_CROSS)gcc
-CXX := $(TARGET_CROSS)g++
-AR  := $(TARGET_CROSS)ar
+platform ?= unix
+
+USE_BUNDLED_ZSTD :=
+
+ifeq ($(platform),unix)
+   CC  := $(TARGET_CROSS)gcc
+   CXX := $(TARGET_CROSS)g++
+   AR  := $(TARGET_CROSS)ar
+   PLATFORM_LIBS := -lz -lpthread -lzstd
+else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
+   ANDROID_NDK_ROOT ?= $(NDK_ROOT)
+   ifeq ($(ANDROID_NDK_ROOT),)
+      $(error Set ANDROID_NDK_ROOT (or NDK_ROOT) to your Android NDK path)
+   endif
+   ANDROID_API ?= 24
+   HOST_TAG := $(shell uname -s | tr A-Z a-z)-x86_64
+   NDK_BIN  := $(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(HOST_TAG)/bin
+
+   ifeq ($(platform),android-arm64)
+      ANDROID_TRIPLE := aarch64-linux-android
+   endif
+   ifeq ($(platform),android-armv7)
+      ANDROID_TRIPLE := armv7a-linux-androideabi
+   endif
+   ifeq ($(platform),android-x86_64)
+      ANDROID_TRIPLE := x86_64-linux-android
+   endif
+   ifeq ($(platform),android-x86)
+      ANDROID_TRIPLE := i686-linux-android
+   endif
+
+   CC  := $(NDK_BIN)/$(ANDROID_TRIPLE)$(ANDROID_API)-clang
+   CXX := $(NDK_BIN)/$(ANDROID_TRIPLE)$(ANDROID_API)-clang++
+   AR  := $(NDK_BIN)/llvm-ar
+
+   PLATFORM_LIBS    := -lz -llog
+   USE_BUNDLED_ZSTD := 1
+else
+   $(error Unknown platform "$(platform)")
+endif
 
 $(shell mkdir -p $(BUILD_DIR))
 $(shell cp $(CORE_DIR)/libretro/config_libretro.h $(BUILD_DIR)/config.h)
@@ -29,32 +71,36 @@ INCLUDES := \
     -I$(CORE_DIR)/mednafen \
     -I$(CORE_DIR)/mednafen/minilzo
 
+ifeq ($(USE_BUNDLED_ZSTD),1)
+   INCLUDES += -I$(CORE_DIR)/mednafen/zstd
+endif
+
 CXXFLAGS := \
     -std=c++11 -O3 \
     -fsigned-char -fwrapv -fexceptions \
     -fno-fast-math -fno-unsafe-math-optimizations \
-    -fno-aggressive-loop-optimizations -fno-ipa-icf \
     -fno-printf-return-value -fstrict-aliasing \
     -fPIC -fvisibility=hidden \
     $(DEFINES) $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
+# GCC-only flags; clang (NDK) doesn't know them.
+ifeq ($(platform),unix)
+   CXXFLAGS += -fno-aggressive-loop-optimizations -fno-ipa-icf
+endif
+
 CFLAGS := \
     -O3 -fsigned-char -fwrapv \
     -fno-fast-math -fno-unsafe-math-optimizations \
     -fstrict-aliasing -fPIC -fvisibility=hidden \
-    -DHAVE_CONFIG_H \
+    -DHAVE_CONFIG_H -DZSTD_NO_TRACE=1 -DZSTD_HAVE_WEAK_SYMBOLS=0 \
     $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
-
-ifneq ($(filter aarch64%,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
-  CXXFLAGS += -mcpu=cortex-a76
-endif
 
 LDFLAGS := -shared \
     -Wl,-soname,$(TARGET_NAME)_libretro.so \
     -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
-    -lz -lpthread -lzstd
+    $(PLATFORM_LIBS)
 
 CORE_SRCS :=
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/*.cpp)
@@ -108,6 +154,19 @@ CORE_C_SRCS := \
     $(CORE_DIR)/mednafen/trio/trio.c \
     $(CORE_DIR)/mednafen/trio/trionan.c \
     $(CORE_DIR)/mednafen/trio/triostr.c
+
+ifeq ($(USE_BUNDLED_ZSTD),1)
+   CORE_C_SRCS += \
+       $(CORE_DIR)/mednafen/zstd/common/entropy_common.c \
+       $(CORE_DIR)/mednafen/zstd/common/error_private.c \
+       $(CORE_DIR)/mednafen/zstd/common/fse_decompress.c \
+       $(CORE_DIR)/mednafen/zstd/common/xxhash.c \
+       $(CORE_DIR)/mednafen/zstd/common/zstd_common.c \
+       $(CORE_DIR)/mednafen/zstd/decompress/huf_decompress.c \
+       $(CORE_DIR)/mednafen/zstd/decompress/zstd_ddict.c \
+       $(CORE_DIR)/mednafen/zstd/decompress/zstd_decompress_block.c \
+       $(CORE_DIR)/mednafen/zstd/decompress/zstd_decompress.c
+endif
 
 OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_CXX_SRCS)) \
         $(patsubst $(CORE_DIR)/%.c,$(BUILD_DIR)/%.o,$(CORE_C_SRCS))
