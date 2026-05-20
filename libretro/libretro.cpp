@@ -22,6 +22,10 @@
 #include "MemoryStream.h"
 #include "video/surface.h"
 
+#include "ss/ss.h"
+#include "ss/vdp1_common.h"
+#include "ss/vdp2.h"
+
 using namespace Mednafen;
 
 /* ── Stubs for excluded/unused modules ────────────────────────────────────── */
@@ -526,6 +530,59 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rot);
     }
 
+    /* Memory map — exposes Saturn bus regions so RetroArch's NCI
+     * READ_CORE_MEMORY / RetroAchievements can inspect them.
+     * All descriptors use the default (blank) addrspace so a plain
+     * hex bus address (e.g. "06000000") finds them directly.
+     * Storage is uint16 host-byte-order; the BIGENDIAN flag tells the
+     * frontend the underlying Saturn bus is big-endian, so byte reads
+     * on LE hosts see byte-swapped 16-bit words. */
+    {
+        using namespace MDFN_IEN_SS;
+        static retro_memory_descriptor desc[] = {
+            /* SH-2 work RAM, low half (CS0/A-bus) */
+            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x00200000, 0, 0, 0x100000, nullptr },
+            /* Internal SMPC Backup RAM (real bus has open-bus on odd
+             * bytes; we expose 32 KB contiguous for debug). */
+            { RETRO_MEMDESC_SAVE_RAM   | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x00180000, 0, 0, 0x8000,   nullptr },
+            /* VDP1 VRAM (512 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05C00000, 0, 0, 0x80000,  nullptr },
+            /* VDP1 framebuffer 0 — real bus addr of the display FB
+             * region. Note: VDP1 swaps which FB is bus-visible; this
+             * descriptor always shows FB[0]. */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05C80000, 0, 0, 0x40000,  nullptr },
+            /* VDP1 framebuffer 1 — placed in unused bus region just
+             * after the real FB (0x05CC0000-0x05D7FFFF is open bus
+             * on a real Saturn). */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05CC0000, 0, 0, 0x40000,  nullptr },
+            /* VDP2 VRAM (512 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05E00000, 0, 0, 0x80000,  nullptr },
+            /* VDP2 CRAM (palette, 4 KB) */
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05F00000, 0, 0, 0x1000,   nullptr },
+            /* SH-2 work RAM, high half (CS3/B-bus) — main work RAM */
+            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x06000000, 0, 0, 0x100000, nullptr },
+        };
+        desc[0].ptr = SS_GetWorkRAML();
+        desc[1].ptr = SS_GetBackupRAM();
+        desc[2].ptr = VDP1::VRAM;
+        desc[3].ptr = VDP1::FB[0];
+        desc[4].ptr = VDP1::FB[1];
+        desc[5].ptr = VDP2::GetVRAM();
+        desc[6].ptr = VDP2::GetCRAM();
+        desc[7].ptr = SS_GetWorkRAMH();
+
+        retro_memory_map mmap = { desc, (unsigned)(sizeof(desc) / sizeof(desc[0])) };
+        environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
+    }
+
     return true;
 }
 
@@ -726,8 +783,24 @@ RETRO_API unsigned retro_get_region(void)
         return (r=="eu") ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
     } catch(...) { return RETRO_REGION_NTSC; }
 }
-RETRO_API void *retro_get_memory_data(unsigned) { return nullptr; }
-RETRO_API size_t retro_get_memory_size(unsigned) { return 0; }
+RETRO_API void *retro_get_memory_data(unsigned id)
+{
+    if(!initialized) return nullptr;
+    switch(id) {
+    case RETRO_MEMORY_SYSTEM_RAM: return MDFN_IEN_SS::SS_GetWorkRAMH();
+    case RETRO_MEMORY_VIDEO_RAM:  return MDFN_IEN_SS::VDP2::GetVRAM();
+    default: return nullptr;
+    }
+}
+RETRO_API size_t retro_get_memory_size(unsigned id)
+{
+    if(!initialized) return 0;
+    switch(id) {
+    case RETRO_MEMORY_SYSTEM_RAM: return 1024 * 1024;  /* WorkRAMH */
+    case RETRO_MEMORY_VIDEO_RAM:  return 512 * 1024;   /* VDP2 VRAM */
+    default: return 0;
+    }
+}
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
 {
     if(!initialized || port > 1) return;
