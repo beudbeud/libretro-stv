@@ -1400,6 +1400,9 @@ void PokeVRAM(uint32 addr, const uint8 val)
  VDP2REND_Write16_DB(addr & ~1, ne16_rbo_be<uint16>(VRAM, addr & ~1));
 }
 
+uint16* GetVRAM(void) { return VRAM; }
+uint16* GetCRAM(void) { return CRAM; }
+
 void SetLayerEnableMask(uint64 mask)
 {
  VDP2REND_SetLayerEnableMask(mask);

@@ -151,6 +151,11 @@ uint8 PeekVRAM(uint32 addr) MDFN_COLD;
 void PokeVRAM(uint32 addr, const uint8 val) MDFN_COLD;
 void MakeDump(const std::string& path) MDFN_COLD;
 
+// Raw buffer accessors for libretro memory map / NCI debug.
+// uint16 host-byte-order storage; Saturn bus is big-endian.
+uint16* GetVRAM(void);   // 0x80000 bytes, mapped at 0x05E00000
+uint16* GetCRAM(void);   // 0x1000 bytes,  mapped at 0x05F00000
+
 INLINE uint32 PeekLine(void) { MDFN_HIDE extern int32 VCounter; return VCounter; }
 INLINE uint32 PeekHPos(void) { MDFN_HIDE extern int32 HCounter; return HCounter; }
 }

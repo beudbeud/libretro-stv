@@ -179,6 +179,14 @@ namespace MDFN_IEN_SS
  void SS_SetPhysMemMap(uint32 Astart, uint32 Aend, uint16* ptr, uint32 length, bool is_writeable = false) MDFN_COLD;
 
  void SS_Reset(bool powering_up) MDFN_COLD;
+
+ // Raw buffer accessors for libretro memory map / NCI debug.
+ // Layout note: WorkRAML/H are stored as uint16 in host byte order
+ // (Saturn bus is big-endian), so byte reads on little-endian hosts
+ // see byte-swapped 16-bit words.
+ uint16* SS_GetWorkRAML(void);   // 0x100000 bytes, mapped at 0x00200000
+ uint16* SS_GetWorkRAMH(void);   // 0x100000 bytes, mapped at 0x06000000
+ uint8*  SS_GetBackupRAM(void);  // 0x8000 bytes (internal SMPC BUP)
 }
 
 #endif

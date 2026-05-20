@@ -460,6 +460,10 @@ void SS_SetPhysMemMap(uint32 Astart, uint32 Aend, uint16* ptr, uint32 length, bo
   SetFastMemMap(Astart + Abase, Aend + Abase, ptr, length, is_writeable);
 }
 
+uint16* SS_GetWorkRAML(void)  { return WorkRAML; }
+uint16* SS_GetWorkRAMH(void)  { return WorkRAMH; }
+uint8*  SS_GetBackupRAM(void) { return BackupRAM; }
+
 #include "sh7095.inc"
 
 //

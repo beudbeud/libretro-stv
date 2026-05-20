@@ -22,6 +22,10 @@
 #include "MemoryStream.h"
 #include "video/surface.h"
 
+#include "ss/ss.h"
+#include "ss/vdp1_common.h"
+#include "ss/vdp2.h"
+
 using namespace Mednafen;
 
 /* ── Stubs for excluded/unused modules ────────────────────────────────────── */
@@ -526,6 +530,44 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rot);
     }
 
+    /* Memory map — exposes Saturn bus regions so RetroArch's NCI
+     * READ_CORE_MEMORY / RetroAchievements can inspect them.
+     * Storage is uint16 host-byte-order; the BIGENDIAN flag tells the
+     * frontend the underlying system bus is big-endian so byte addresses
+     * are byte-swapped on LE hosts. */
+    {
+        using namespace MDFN_IEN_SS;
+        static retro_memory_descriptor desc[] = {
+            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x00200000, 0, 0, 0x100000, "WRAML"  },
+            { RETRO_MEMDESC_SYSTEM_RAM | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x06000000, 0, 0, 0x100000, "WRAMH"  },
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05C00000, 0, 0, 0x80000,  "V1VRAM" },
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05E00000, 0, 0, 0x80000,  "V2VRAM" },
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0x05F00000, 0, 0, 0x1000,   "V2CRAM" },
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0, 0, 0, 0x40000, "V1FB0" },
+            { RETRO_MEMDESC_VIDEO_RAM  | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0, 0, 0, 0x40000, "V1FB1" },
+            { RETRO_MEMDESC_SAVE_RAM   | RETRO_MEMDESC_BIGENDIAN,
+              nullptr, 0, 0, 0, 0, 0x8000,  "BUP"   },
+        };
+        desc[0].ptr = SS_GetWorkRAML();
+        desc[1].ptr = SS_GetWorkRAMH();
+        desc[2].ptr = VDP1::VRAM;
+        desc[3].ptr = VDP2::GetVRAM();
+        desc[4].ptr = VDP2::GetCRAM();
+        desc[5].ptr = VDP1::FB[0];
+        desc[6].ptr = VDP1::FB[1];
+        desc[7].ptr = SS_GetBackupRAM();
+
+        retro_memory_map mmap = { desc, (unsigned)(sizeof(desc) / sizeof(desc[0])) };
+        environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
+    }
+
     return true;
 }
 
@@ -726,8 +768,24 @@ RETRO_API unsigned retro_get_region(void)
         return (r=="eu") ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
     } catch(...) { return RETRO_REGION_NTSC; }
 }
-RETRO_API void *retro_get_memory_data(unsigned) { return nullptr; }
-RETRO_API size_t retro_get_memory_size(unsigned) { return 0; }
+RETRO_API void *retro_get_memory_data(unsigned id)
+{
+    if(!initialized) return nullptr;
+    switch(id) {
+    case RETRO_MEMORY_SYSTEM_RAM: return MDFN_IEN_SS::SS_GetWorkRAMH();
+    case RETRO_MEMORY_VIDEO_RAM:  return MDFN_IEN_SS::VDP2::GetVRAM();
+    default: return nullptr;
+    }
+}
+RETRO_API size_t retro_get_memory_size(unsigned id)
+{
+    if(!initialized) return 0;
+    switch(id) {
+    case RETRO_MEMORY_SYSTEM_RAM: return 1024 * 1024;  /* WorkRAMH */
+    case RETRO_MEMORY_VIDEO_RAM:  return 512 * 1024;   /* VDP2 VRAM */
+    default: return 0;
+    }
+}
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
 {
     if(!initialized || port > 1) return;
