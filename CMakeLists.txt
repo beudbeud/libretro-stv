@@ -20,5 +20,5 @@ add_compile_definitions(
 configure_file(${CMAKE_SOURCE_DIR}/libretro/config_libretro.h
                ${CMAKE_BINARY_DIR}/config.h COPYONLY)
 
-add_subdirectory(src)
+add_subdirectory(mednafen)
 add_subdirectory(libretro)

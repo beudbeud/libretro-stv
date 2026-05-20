@@ -18,10 +18,10 @@
 /po/Makefile
 /po/Makefile.in
 /po/POTFILES
-/src/Makefile
-/src/drivers/Makefile
-/src/drivers_dos/Makefile
-/src/drivers_libxxx/Makefile
-/src/sexyal/Makefile
-/src/ss/Makefile
+/mednafen/Makefile
+/mednafen/drivers/Makefile
+/mednafen/drivers_dos/Makefile
+/mednafen/drivers_libxxx/Makefile
+/mednafen/sexyal/Makefile
+/mednafen/ss/Makefile
 

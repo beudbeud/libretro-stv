@@ -24,8 +24,9 @@ DEFINES := \
 INCLUDES := \
     -I$(CORE_DIR)/libretro/wrapper_include \
     -I$(BUILD_DIR) \
-    -I$(CORE_DIR)/src \
-    -I$(CORE_DIR)/src/minilzo
+    -I$(CORE_DIR) \
+    -I$(CORE_DIR)/mednafen \
+    -I$(CORE_DIR)/mednafen/minilzo
 
 CXXFLAGS := \
     -std=c++11 -O3 \
@@ -47,25 +48,25 @@ LDFLAGS := -shared \
     -lz -lpthread -lzstd
 
 CORE_SRCS :=
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/input/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/ss/cart/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/cdrom/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/video/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/sound/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/compress/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/string/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hash/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/time/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/resampler/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/v810/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/m68k/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_cpu/z80-fuse/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_misc/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_sound/*.cpp)
-CORE_SRCS += $(wildcard $(CORE_DIR)/src/hw_video/*.cpp)
-CORE_SRCS := $(filter-out $(CORE_DIR)/src/drivers/%, $(CORE_SRCS))
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/ss/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/ss/input/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/ss/cart/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/cdrom/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/video/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/sound/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/compress/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/string/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hash/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/time/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/resampler/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_cpu/v810/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_cpu/m68k/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_cpu/z80-fuse/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_misc/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_sound/*.cpp)
+CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_video/*.cpp)
+CORE_SRCS := $(filter-out $(CORE_DIR)/mednafen/drivers/%, $(CORE_SRCS))
 
 LIBRETRO_SRCS := $(CORE_DIR)/libretro/libretro.cpp
 ALL_SRCS := $(LIBRETRO_SRCS) $(CORE_SRCS)
