@@ -901,10 +901,21 @@ void Init(const bool IsPAL, const uint64 affinity)
 
 void SetGetVideoParams(MDFNGI* gi, const bool caspect, const int sls, const int sle, const bool show_h_overscan, const bool dohblend)
 {
+ // ST-V is 240p / single-density: 263 lines per frame NTSC, 313 PAL,
+ // never interlaced. The earlier ((N + N-0.5)/2) average produced the
+ // field rate (~59.883 NTSC / ~49.960 PAL), ~0.1% above the real frame
+ // rate, which created a constant report-vs-internal audio skew the
+ // SCSP resampler swallowed silently.
+ //
+ // NTSC: 8 x NTSC subcarrier (28,636,363.6 Hz) / dot_div=4 / Htotal=455
+ //       / Vtotal=263 = 59.82650314089141 Hz. The 320- vs 352-dot
+ //       coincidence (dot_div 61|65 and Htotal 455|427 swap cancels)
+ //       keeps this constant across dotsel.
+ // PAL : 28,437,500 Hz / 4 / 455 / 313 = 49.92012779552716 Hz.
  if(PAL)
-  gi->fps = 65536 * 256 * (1734687500.0 / 61 / 4 / 455 / ((313 + 312.5) / 2.0));
+  gi->fps = 65536 * 256 * (1734687500.0 / 61 / 4 / 455 / 313);
  else
-  gi->fps = 65536 * 256 * (1746818181.8 / 61 / 4 / 455 / ((263 + 262.5) / 2.0));
+  gi->fps = 65536 * 256 * (1746818181.8 / 61 / 4 / 455 / 263);
 
  VDP2REND_SetGetVideoParams(gi, caspect, sls, sle, show_h_overscan, dohblend);
 }
