@@ -19,25 +19,28 @@
 #define MDFN_PSS_STYLE 1
 
 /* ── Endianness — detect WITHOUT including <endian.h> (it opens extern "C")
- * Use compiler built-ins instead.                                           */
+ * Use compiler built-ins instead. types.h derives MDFN_IS_BIGENDIAN from
+ * MSB_FIRST/LSB_FIRST, so don't define it here (avoids redefinition warning). */
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
 # if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #  define MSB_FIRST 1
-#  define MDFN_IS_BIGENDIAN 1
 # else
 #  define LSB_FIRST 1
-#  define MDFN_IS_BIGENDIAN 0
 # endif
 #else
 /* Fallback: assume little-endian (x86, ARM, AArch64) */
 # define LSB_FIRST 1
-# define MDFN_IS_BIGENDIAN 0
 #endif
 
 /* ── INLINE and related — must be defined BEFORE types.h / endian.h ──────
  * types.h defines these based on __clang__ / __GNUC__, but endian.h uses
  * INLINE before types.h is ever included in some translation units.
- * Defining them here ensures they are always available first.              */
+ * Defining them here ensures they are always available first.
+ *
+ * MDFN_FORMATSTR and MDFN_WARN_UNUSED_RESULT are intentionally NOT defined
+ * here — types.h gives them the proper attribute-bearing definitions, and
+ * no C translation unit uses them, so leaving them out avoids the
+ * redefinition warning emitted when types.h is later included.            */
 #if defined(__clang__) || defined(__GNUC__)
 # define INLINE        inline __attribute__((always_inline))
 # define NO_INLINE     __attribute__((noinline))
@@ -47,9 +50,7 @@
 # define MDFN_RESTRICT __restrict__
 # define MDFN_UNLIKELY(n)  __builtin_expect((n) != 0, 0)
 # define MDFN_LIKELY(n)    __builtin_expect((n) != 0, 1)
-# define MDFN_WARN_UNUSED_RESULT __attribute__((warn_unused_result))
 # define MDFN_NOWARN_UNUSED      __attribute__((unused))
-# define MDFN_FORMATSTR(a,b,c)
 # define MDFN_ASSUME_ALIGNED(p, align) \
          ((decltype(p))__builtin_assume_aligned((p), (align)))
 # define MDFN_UNDEFINED(cond) ((cond) ? (void)__builtin_unreachable() : (void)0)
@@ -75,9 +76,7 @@
 # define MDFN_RESTRICT
 # define MDFN_UNLIKELY(n)  (n)
 # define MDFN_LIKELY(n)    (n)
-# define MDFN_WARN_UNUSED_RESULT
 # define MDFN_NOWARN_UNUSED
-# define MDFN_FORMATSTR(a,b,c)
 # define MDFN_ASSUME_ALIGNED(p, align) (p)
 # define MDFN_UNDEFINED(cond)
 # define MDFN_FASTCALL
