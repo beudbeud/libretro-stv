@@ -40,6 +40,13 @@
 namespace MDFN_IEN_SS
 {
 
+// Improved-mesh-transparency runtime flag, owned by VDP1. Read on
+// MixIt's per-pixel hot path to gate the winprio-capture store, and
+// in DrawLine to gate the mesh-overlay call -- forward-declared here
+// to avoid pulling vdp1_common.h (a VDP1-private header) into the
+// VDP2 translation unit.
+namespace VDP1 { MDFN_HIDE extern bool MeshImproved; }
+
 //uint8 vdp2rend_prepad_bss
 
 static EmulateSpecStruct* espec = NULL;
@@ -2616,6 +2623,14 @@ static void T_MixIt(uint32* target, const unsigned vdp2_line, const unsigned w, 
   if((uint8)pix >= PIX_SHADHALVTEST8_VAL)
    pix = (uint32)pix | ((pix >> 1) & 0x7F7F7F00000000ULL);
 
+  // Improved-mesh-transparency occlusion gate: record the priority of
+  // the layer whose pix won this output pixel. ApplyMeshOverlay reads
+  // this to suppress mesh blending where a higher-priority VDP2 layer
+  // already occludes the would-be VDP1 sprite. Gated on the runtime
+  // flag so MixIt's default-off cost is unchanged.
+  if(VDP1::MeshImproved)
+   LIB[vdp2_line].vdp1_winprio[i] = (pix >> PIX_PRIO_SHIFT) & 0x7;
+
   target[i] = pix >> PIX_RGB_SHIFT;
  }
 }
@@ -2626,6 +2641,103 @@ static void (*MixIt[2][7][2][2])(uint32* target, const unsigned vdp2_line, const
  {  {  { T_MixIt<0, 0, 0, 0>, T_MixIt<0, 0, 0, 1>,  },  { T_MixIt<0, 0, 1, 0>, T_MixIt<0, 0, 1, 1>,  },  },  {  { T_MixIt<0, 1, 0, 0>, T_MixIt<0, 1, 0, 1>,  },  { T_MixIt<0, 1, 1, 0>, T_MixIt<0, 1, 1, 1>,  },  },  {  { T_MixIt<0, 2, 0, 0>, T_MixIt<0, 2, 0, 1>,  },  { T_MixIt<0, 2, 1, 0>, T_MixIt<0, 2, 1, 1>,  },  },  {  { T_MixIt<0, 3, 0, 0>, T_MixIt<0, 3, 0, 1>,  },  { T_MixIt<0, 3, 1, 0>, T_MixIt<0, 3, 1, 1>,  },  },  {  { T_MixIt<0, 4, 0, 0>, T_MixIt<0, 4, 0, 1>,  },  { T_MixIt<0, 4, 1, 0>, T_MixIt<0, 4, 1, 1>,  },  },  {  { T_MixIt<0, 5, 0, 0>, T_MixIt<0, 5, 0, 1>,  },  { T_MixIt<0, 5, 1, 0>, T_MixIt<0, 5, 1, 1>,  },  },  {  { T_MixIt<0, 6, 0, 0>, T_MixIt<0, 6, 0, 1>,  },  { T_MixIt<0, 6, 1, 0>, T_MixIt<0, 6, 1, 1>,  },  },  },
  {  {  { T_MixIt<1, 0, 0, 0>, T_MixIt<1, 0, 0, 1>,  },  { T_MixIt<1, 0, 1, 0>, T_MixIt<1, 0, 1, 1>,  },  },  {  { T_MixIt<1, 1, 0, 0>, T_MixIt<1, 1, 0, 1>,  },  { T_MixIt<1, 1, 1, 0>, T_MixIt<1, 1, 1, 1>,  },  },  {  { T_MixIt<1, 2, 0, 0>, T_MixIt<1, 2, 0, 1>,  },  { T_MixIt<1, 2, 1, 0>, T_MixIt<1, 2, 1, 1>,  },  },  {  { T_MixIt<1, 3, 0, 0>, T_MixIt<1, 3, 0, 1>,  },  { T_MixIt<1, 3, 1, 0>, T_MixIt<1, 3, 1, 1>,  },  },  {  { T_MixIt<1, 4, 0, 0>, T_MixIt<1, 4, 0, 1>,  },  { T_MixIt<1, 4, 1, 0>, T_MixIt<1, 4, 1, 1>,  },  },  {  { T_MixIt<1, 5, 0, 0>, T_MixIt<1, 5, 0, 1>,  },  { T_MixIt<1, 5, 1, 0>, T_MixIt<1, 5, 1, 1>,  },  },  {  { T_MixIt<1, 6, 0, 0>, T_MixIt<1, 6, 0, 1>,  },  { T_MixIt<1, 6, 1, 0>, T_MixIt<1, 6, 1, 1>,  },  },  },
 };
+
+// Apply the improved-mesh-transparency overlay to a freshly-composited
+// scanline (called after MixIt, before ReorderRGB, so the surface row
+// is still in the internal RGB24 format). For each pixel where the
+// mesh side-buffer has a non-zero texel, decode it (RGB direct or
+// paletted-via-CRAM, the same way VDP2's sprite layer would decode the
+// same texel from FB) and 50%-blend the resulting colour into the
+// surface pixel.
+//
+// This is the late-composite half of the Kronos "improved mesh"
+// mechanism. PlotPixel routes mesh writes to MeshFB instead of the
+// main FB, so prior VDP1 content underneath stays in the main FB and
+// ends up correctly visible after VDP2 layer composition; the blend
+// here then tints those final pixels with the mesh colour.
+//
+// The value PlotPixel writes is the RAW texel VDP1's TexFetch produced
+// -- a 15-bit RGB code in direct-colour sprite types, or a CRAM offset
+// packed with priority/cc bits in paletted types. The branch below
+// mirrors T_DrawSpriteData's decode so paletted and RGB-direct mesh
+// both render with correct colours.
+//
+// 0 means "no mesh pixel here". When MeshImproved is off MeshFB is
+// never written, so mesh_line is all zeros and the test rejects every
+// entry on the first compare.
+static INLINE void ApplyMeshOverlay(uint32* target, const uint16* mesh_line, const uint8* winprio, unsigned w, unsigned hires_shift)
+{
+ // dc-mask per SpriteType -- mirrors the switch in T_DrawSpriteData.
+ static const uint16 SpriteType_DcMask[16] = {
+  0x7FF, 0x7FF, 0x7FF, 0x7FF,   // 0-3
+  0x3FF, 0x7FF, 0x3FF, 0x1FF,   // 4-7
+  0x7F,  0x3F,  0x3F,  0x3F,    // 8-B
+  0xFF,  0xFF,  0xFF,  0xFF,    // C-F
+ };
+ // Priority-bit (shift, mask) per SpriteType, mirroring the switch in
+ // T_DrawSpriteData. Used to extract the mesh texel's would-be sprite-
+ // priority slot for the SpritePrioNum[] lookup. Types 0xB and 0xF
+ // have no priority bits in the texel, so they fall back to slot 0 --
+ // the same default T_DrawSpriteData leaves pr at for those types.
+ static const uint8 SpriteType_PrShift[16] = {
+  14, 13, 14, 13,  13, 12, 12, 12,
+   7,  7,  6,  0,   7,  7,  6,  0,
+ };
+ static const uint8 SpriteType_PrMask[16] = {
+  0x3, 0x7, 0x1, 0x3,  0x3, 0x7, 0x7, 0x7,
+  0x1, 0x1, 0x3, 0x0,  0x1, 0x1, 0x3, 0x0,
+ };
+ const unsigned SpriteType      = SPCTL_Low & 0xF;
+ const bool     SpriteColorMode = SPCTL_Low & 0x20;
+ const unsigned dc_mask         = SpriteType_DcMask[SpriteType];
+ const unsigned pr_shift        = SpriteType_PrShift[SpriteType];
+ const unsigned pr_mask         = SpriteType_PrMask[SpriteType];
+ const unsigned cao             = (unsigned)CRAMAddrOffs_Sprite << 8;
+
+ for(unsigned i = 0; i < w; i++)
+ {
+  // In hires output the mesh source has half the width of the VDP2
+  // output, so each source pixel maps to two output pixels (mirrors
+  // T_DrawSpriteData's vdp1sb[i >> TA_HiRes]).
+  const uint16 m = mesh_line[i >> hires_shift];
+
+  if(MDFN_UNLIKELY(m != 0))
+  {
+   // Priority occlusion. If a higher-priority VDP2 layer won this
+   // output pixel, the would-be VDP1 sprite is hidden by it and the
+   // mesh must not tint -- otherwise the mesh colour bleeds through
+   // foreground layers.
+   const unsigned mesh_pr   = (m >> pr_shift) & pr_mask;
+   const unsigned mesh_prio = SpritePrioNum[mesh_pr];
+   if(winprio[i] > mesh_prio)
+    continue;
+
+   uint32 mesh_rgb24;
+
+   if(SpriteColorMode && (m & 0x8000))
+   {
+    // RGB-direct: decode exactly as the sprite layer does.
+    mesh_rgb24 = rgb15_to_rgb24(m);
+   }
+   else
+   {
+    // Paletted: same CRAM lookup the sprite layer would do for this
+    // texel, including the per-SpriteType dc-mask and sprite CRAM
+    // address offset.
+    const unsigned dc = m & dc_mask;
+    mesh_rgb24 = ColorCache[(cao + dc) & 0x7FF];
+   }
+
+   // Per-byte SWAR 50% blend with carry strip across byte boundaries:
+   //   result = ((a & 0xFEFEFEFE) >> 1) + ((b & 0xFEFEFEFE) >> 1)
+   //          + (a & b & 0x01010101)
+   const uint32 a = target[i];
+   const uint32 b = mesh_rgb24;
+
+   target[i] = ((a & 0xFEFEFEFE) >> 1) + ((b & 0xFEFEFEFE) >> 1) + (a & b & 0x01010101);
+  }
+ }
+}
 
 static int32 ApplyHBlend(uint32* const target, int32 w)
 {
@@ -3197,6 +3309,18 @@ static NO_INLINE void DrawLine(const uint16 out_line, const uint16 vdp2_line, co
    }
 
    MixIt[rbgdualen][special][CCRTMD][CCMD](target + tvxo, vdp2_line, w, back_rgb24, blursrc);
+
+   // Late composite for the improved-mesh-transparency option. Reads
+   // the per-scanline mesh side-buffer that VDP1::GetLine populated
+   // from MeshFB; blends mesh pixels at 50% on top of the freshly-
+   // composited surface row (still in internal RGB24 here, before
+   // ReorderRGB), gated on the mesh's would-be sprite priority vs the
+   // winning layer's priority recorded by MixIt. Gated on the runtime
+   // flag so the default-off path skips both this scan and the
+   // priority-store in MixIt.
+   if(VDP1::MeshImproved)
+    ApplyMeshOverlay(target + tvxo, LIB[vdp2_line].vdp1_mesh_line, LIB[vdp2_line].vdp1_winprio, w, (HRes & 0x2) >> 1);
+
    ReorderRGB(target + tvxo, w, espec->surface->format.Rshift, espec->surface->format.Gshift, espec->surface->format.Bshift);
   }
 
