@@ -1619,8 +1619,12 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   * partially-drawn sprites cannot leak into the displayed buffer. */
  static const char* const vdp1_instant_draw[] =
  {
-  "Astra SuperStars",  /* 315-5881: stripes caused by time-sliced drawing vs FB swap timing */
-  "Virtua Fighter Kids", /* stripes on fast sprite movement */
+  "Astra SuperStars",    /* rolling write spans ~5 frames; VDP1INSTANT gives consistent 1-frame-old positions */
+  "Virtua Fighter Kids", /* same rolling write (~525/540 cmds/frame); LATESWAP snapshot has mixed-age positions */
+ };
+
+ static const char* const vdp1_late_draw[] =
+ {
  };
 
  /* Puzzle, board, quiz, card, fishing, golf, and other low-sprite-throughput
@@ -1676,6 +1680,13 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   if(!strcmp(sgi->name, name))
   {
    hacks |= HORRIBLEHACK_VDP1INSTANT;
+   break;
+  }
+
+ for(const char* name : vdp1_late_draw)
+  if(!strcmp(sgi->name, name))
+  {
+   hacks |= HORRIBLEHACK_VDP1LATESWAP;
    break;
   }
 

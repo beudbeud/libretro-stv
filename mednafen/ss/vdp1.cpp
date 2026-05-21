@@ -74,6 +74,7 @@ static uint8 EDSR;
 
 uint16* FBDrawWhichPtr;
 static bool FBDrawWhich;
+static bool DisplayFBWhich;
 
 static bool DrawingActive;
 static uint32 CurCommandAddr;
@@ -93,6 +94,9 @@ static bool vbcdpending;
 static bool FBManualPending;
 static bool FBVBErasePending;
 static bool FBVBEraseActive;
+static bool LateSwapPending;   // HORRIBLEHACK_VDP1LATESWAP: vblank-start swap not yet fired
+static bool LateSwapActive;    // HORRIBLEHACK_VDP1LATESWAP: swap fired, suppress leaving-vblank re-swap
+static bool LateSwapNeedsDraw; // HORRIBLEHACK_VDP1LATESWAP: swap done but StartDrawing not yet called
 static sscpu_timestamp_t FBVBEraseLastTS;
 static sscpu_timestamp_t LastRWTS;
 
@@ -122,6 +126,24 @@ static uint32 InstantDrawSanityLimit; // ss_horrible_hacks
 
 uint16 VRAM[0x40000];
 uint16 FB[2][0x20000];
+/* Command-table snapshot used by VDP1INSTANT and VDP1LATESWAP draw loops.
+ *
+ * VDP1INSTANT: rebuilt at each early-swap as a per-command composite:
+ *   commands updated in the current active period → copied from live VRAM
+ *   (fresh positions, zero lag for those commands).
+ *   commands in the seam (~15/540) that weren't rewritten this frame →
+ *   kept from the previous snapshot (1-frame-old but self-consistent).
+ *
+ * VDP1LATESWAP: full memcpy of VRAM at vblank start (kept for future use). */
+static uint16 VRAMCmdSnapshot[0x4000];
+/* Per-word write timestamp: VRAMCmdWriteFrame[i] == VDP1FrameNum means word i
+ * of the command table was written during the current active-display period.
+ * Allows the snapshot builder to distinguish fresh vs seam commands. */
+static uint32 VRAMCmdWriteFrame[0x4000];
+static uint32 VDP1FrameNum; // incremented at each VDP1INSTANT early-swap
+static bool VRAMCmdWrittenThisScanline; // cleared each HBlank rising edge
+static bool VRAMCmdSeenAnyWrite;        // true once CPU writes any command VRAM this active period
+static bool VDP1InstantDrawDoneThisFrame; // inactivity snapshot already taken; use it in Block 2
 //
 //
 //
@@ -295,12 +317,16 @@ void Reset(bool powering_up)
  }
 
  FBDrawWhich = 0;
+ DisplayFBWhich = 0;
  FBDrawWhichPtr = FB[FBDrawWhich];
  //SS_SetPhysMemMap(0x05C80000, 0x05CFFFFF, FB[FBDrawWhich], sizeof(FB[0]), true);
 
  FBManualPending = false;
  FBVBErasePending = false;
  FBVBEraseActive = false;
+ LateSwapPending = false;
+ LateSwapActive = false;
+ LateSwapNeedsDraw = false;
 
  LOPR = 0;
  CurCommandAddr = 0;
@@ -311,6 +337,11 @@ void Reset(bool powering_up)
  memset(CommandData, 0, sizeof(CommandData));
  InstantDrawSanityLimit = 0;
  DTACounter = 0;
+ memset(VRAMCmdWriteFrame, 0, sizeof(VRAMCmdWriteFrame));
+ VDP1FrameNum = 1; // 0 = "never written"; all existing entries are 0 → stale
+ VRAMCmdWrittenThisScanline = false;
+ VRAMCmdSeenAnyWrite = false;
+ VDP1InstantDrawDoneThisFrame = false;
 
  //
  // Begin registers/variables confirmed to be initialized on reset.
@@ -721,8 +752,8 @@ enum : int { CommandPhaseBias = __COUNTER__ + 1 };
 static INLINE void DoDrawing(void)
 {
 #if 1
- if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT))
-  CycleCounter = InstantDrawSanityLimit; 
+ if(MDFN_UNLIKELY(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)))
+  CycleCounter = InstantDrawSanityLimit;
 #endif
 
  switch(CommandPhase + CommandPhaseBias)
@@ -732,8 +763,16 @@ static INLINE void DoDrawing(void)
    default:
    VDP1_EAT_CLOCKS(0);
 
-   // Fetch command data
-   memcpy(CommandData, &VRAM[CurCommandAddr], sizeof(CommandData));
+   /* Fetch command data from the snapshot (VDP1INSTANT and VDP1LATESWAP).
+    * The snapshot is consistent: VDP1INSTANT built it command-by-command using
+    * per-frame write timestamps; VDP1LATESWAP froze it as a full memcpy at
+    * vblank start.  Live VRAM is used for all other games. */
+   {
+    const uint16* src = ((ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)) &&
+                         (CurCommandAddr + 0x10) <= 0x4000)
+                        ? VRAMCmdSnapshot : VRAM;
+    memcpy(CommandData, &src[CurCommandAddr], sizeof(CommandData));
+   }
 
    VDP1_EAT_CLOCKS(16);
 
@@ -854,8 +893,13 @@ static INLINE void DoDrawing(void)
  Breakout:;
 
 #if 1
- if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT))
-  InstantDrawSanityLimit = CycleCounter;
+ if(MDFN_UNLIKELY(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)))
+ {
+  if(DrawingActive)
+   InstantDrawSanityLimit = 10000000;
+  else
+   InstantDrawSanityLimit = CycleCounter;
+ }
 #endif
 }
 
@@ -930,21 +974,39 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
 
   if(vb_status) // Going into v-blank
   {
-   //
-   // v-blank erase
-   //
-   if((TVMR & TVMR_VBE) || FBVBErasePending)
+   /* LATESWAP fires its own swap+fill_n at vblank start — skip VBErase setup. */
+   if(!(ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP))
    {
-    SS_DBGTI(SS_DBG_VDP1, "[VDP1] VB erase start of framebuffer %d.", !FBDrawWhich);
+    //
+    // v-blank erase
+    //
+    if((TVMR & TVMR_VBE) || FBVBErasePending)
+    {
+     SS_DBGTI(SS_DBG_VDP1, "[VDP1] VB erase start of framebuffer %d.", !FBDrawWhich);
 
-    FBVBErasePending = false;
-    FBVBEraseActive = true;
-    FBVBEraseLastTS = event_timestamp;
+     FBVBErasePending = false;
+     FBVBEraseActive = true;
+     FBVBEraseLastTS = event_timestamp;
+    }
    }
   }
   else // Leaving v-blank
   {
-   InstantDrawSanityLimit = 1000000;
+   if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && LateSwapActive))
+   {
+    /* LATESWAP already swapped and drew at vblank start — skip re-swap.
+     * Lock DisplayFBWhich for the entire active period: if draw is still
+     * running, show the previous complete frame (!FBDrawWhich); if it
+     * finished during vblank, show the fresh frame (FBDrawWhich). */
+    DisplayFBWhich = DrawingActive ? !FBDrawWhich : FBDrawWhich;
+    LateSwapActive = false;
+    InstantDrawSanityLimit = 10000000;
+    EraseYCounter = ~0U;
+    FBManualPending = false;
+   }
+   else
+   {
+   InstantDrawSanityLimit = 10000000;
 
    // Run vblank erase at end of vblank all at once.
    // Always complete the full erase area — the cycle-count limit caused incomplete
@@ -1015,17 +1077,9 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
     EraseParams.fill_data = EWDR;
     //
 
-    /* VDP1INSTANT: force-erase the entire draw buffer before drawing.
-     * Sprites can extend outside EWLR/EWRR bounds and the incremental
-     * EraseYCounter erase may be incomplete, both leaving stale pixels
-     * that cause stripes on fast-moving sprites/polygons.  A full-buffer
-     * clear is unconditional so degenerate EraseParams (EWRR not set)
-     * cannot silently skip the erase.  VDP1INSTANT is only applied to
-     * games (fighters, action titles) that redraw the full screen every
-     * frame, so clearing the entire 512×256 buffer is always safe. */
-    if(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
-     std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
-
+    /* VDP1INSTANT: swap + fill_n + draw are handled by the early-swap path
+     * at the bottom of SetHBVB (last vblank HSync), so this block is a
+     * no-op for VDP1INSTANT games.  Non-VDP1INSTANT games still draw here. */
     if(PTMR & 0x2)	// Start drawing(but only if we swapped the frame)
     {
      StartDrawing();
@@ -1043,9 +1097,232 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
    }
 
    FBManualPending = false;
+   } // else (not LATESWAP)
   }
  }
+ if((ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && !old_vb_status && vb_status)
+  LateSwapPending = true;
+
  vbcdpending |= old_vb_status ^ vb_status;
+
+ /* VDP1INSTANT inactivity snapshot: when the CPU stops writing command VRAM for a
+  * full scanline during active display, take a full VRAM snapshot immediately.
+  * The swap+fill+draw is deferred to Block 2 (last vblank HSync) as usual — no
+  * mid-screen framebuffer switch.  Block 2 uses the pre-taken snapshot directly
+  * (skipping the per-command composite) when VDP1InstantSnapshotReady is set.
+  *
+  * If the CPU writes throughout all of active display (no idle scanline), Block 2
+  * falls back to the per-command composite builder as before. */
+ if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT))
+ {
+  if(!vb_status && hb_status && !old_hb_status) // HBlank rising edge, active display
+  {
+   if(VRAMCmdSeenAnyWrite && !VRAMCmdWrittenThisScanline)
+   {
+    VDP1InstantDrawDoneThisFrame = true;
+    memcpy(VRAMCmdSnapshot, VRAM, sizeof(VRAMCmdSnapshot));
+   }
+   VRAMCmdWrittenThisScanline = false;
+  }
+ }
+
+ /* VDP1INSTANT early-swap: fire the framebuffer swap + clear + draw during the
+  * last vblank HSync (before the first active GetLine call) instead of at the
+  * end of active scanline 0 (the standard vbcdpending path).
+  *
+  * Standard timing problem:
+  *   1. GetLine(scanline 0)  — reads display buffer = frame N-1
+  *   2. HB rising edge → swap → fill_n → VDP1 draws frame N
+  *   3. GetLine(scanline 1+) — reads display buffer = frame N-1  (still!)
+  *      ... but FBDrawWhich flipped, so "display buffer" is now the OLD draw
+  *          buffer, still frame N-1.  VDP2 shows frame N-1 all active period.
+  *
+  * This creates a full-frame VDP1 lag: VDP2 scroll layers update at frame N
+  * while VDP1 sprites show frame N-1.  During fast movement the background
+  * and sprites are visibly out of sync (horizontal stripe artefacts).
+  *
+  * Fix: fire here (last vblank HSYNC, vb_status just went false) so the draw
+  * completes before scanline 0's GetLine runs.  GetLine for VDP1INSTANT is
+  * also changed to read from FB[FBDrawWhich] (the freshly drawn buffer) rather
+  * than FB[!FBDrawWhich] (the previous frame's buffer). */
+ if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) &&
+                   vbcdpending && hb_status && old_vb_status && !vb_status))
+ {
+  vbcdpending = false;
+  InstantDrawSanityLimit = 10000000;
+  FBVBEraseActive = false;  // fill_n replaces the FBVBErase path for VDP1INSTANT
+
+  if(!(FBCR & FBCR_FCM) || (FBManualPending && (FBCR & FBCR_FCT)))
+  {
+#if 1
+   if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1VRAM5000FIX) && DrawingActive && VRAM[0] == 0x5000 && VRAM[1] == 0x0000))
+    VRAM[0] = 0x8000;
+#endif
+
+   if(DrawingActive)
+   {
+    SS_DBGTI(SS_DBG_WARNING | SS_DBG_VDP1, "[VDP1] Drawing aborted by early VDP1INSTANT swap.");
+    DrawingActive = false;
+    VRAMUsageEnd();
+   }
+
+   FBDrawWhich = !FBDrawWhich;
+   FBDrawWhichPtr = FB[FBDrawWhich];
+
+   SS_DBGTI(SS_DBG_VDP1, "[VDP1] VDP1INSTANT early swap: displayed FB → %d.", !FBDrawWhich);
+
+   /* Use inactivity snapshot if taken during active display (all commands at their
+    * final positions for the frame), otherwise fall back to per-command composite. */
+   if(VDP1InstantDrawDoneThisFrame)
+   {
+    VDP1FrameNum++;
+   }
+   else
+   {
+    const uint32 cur = VDP1FrameNum++;
+    for(unsigned w = 0; w < 0x4000; w += 16)
+    {
+     bool fresh = false;
+     for(unsigned i = 0; i < 16 && !fresh; i++)
+      fresh = (VRAMCmdWriteFrame[w + i] == cur);
+     if(fresh) { memcpy(&VRAMCmdSnapshot[w], &VRAM[w], 16 * sizeof(uint16)); }
+    }
+   }
+   /* Reset inactivity tracking for the next active-display period. */
+   VDP1InstantDrawDoneThisFrame = false;
+   VRAMCmdSeenAnyWrite = false;
+   VRAMCmdWrittenThisScanline = false;
+
+   EDSR = EDSR >> 1;
+   LOPR = CurCommandAddr >> 2;
+
+   EraseParams.rot8 = (TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE);
+   EraseParams.fb_x_mask = EraseParams.rot8 ? 0xFF : 0x1FF;
+   EraseParams.y_start = EWLR & 0x1FF;
+   EraseParams.x_start = ((EWLR >> 9) & 0x3F) << 3;
+   EraseParams.y_end = EWRR & 0x1FF;
+   EraseParams.x_bound = ((EWRR >> 9) & 0x7F) << 3;
+   EraseParams.fill_data = EWDR;
+
+   std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
+
+   if(PTMR & 0x2)
+   {
+    StartDrawing();
+    SS_SetEventNT(&events[SS_EVENT_VDP1], Update(event_timestamp));
+   }
+  }
+
+  EraseYCounter = ~0U;
+  if(!(FBCR & FBCR_FCM) || (FBManualPending && !(FBCR & FBCR_FCT)))
+  {
+   if(TVMR & TVMR_ROTATE)
+    FBVBErasePending = true;
+   else
+    EraseYCounter = EraseParams.y_start;
+  }
+  FBManualPending = false;
+ }
+
+ /* VDP1LATESWAP: fire swap + fill_n + draw at the FIRST HSync of vblank (active
+  * display just ended).  Games that stream VDP1 command-table updates exclusively
+  * during active display (e.g. Astra SuperStars, Virtua Fighter Kids) write all
+  * sprite positions within one active period.  Drawing at vblank START means every
+  * command was written in the same frame → no inter-command position skew → no
+  * horizontal bands during fast character movement.
+  *
+  * Drawing at vblank END (VDP1INSTANT) is 1 frame late for these games: commands
+  * written early in the active period are ~16ms stale vs commands written late,
+  * producing ~7-9px positional shear between adjacent sprite commands. */
+ if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && LateSwapPending && hb_status))
+ {
+  LateSwapPending = false;
+  LateSwapActive = true;
+  InstantDrawSanityLimit = 10000000;
+  FBVBEraseActive = false;
+
+  /* Per SSDD doc: FCM/FCT take effect every field (not one-shot).  FCT=1 in FBCR
+   * means swap every vblank as long as it stays set; FBManualPending is only
+   * relevant for the standard (non-LATESWAP) leaving-vblank path. */
+  if(!(FBCR & FBCR_FCM) || (FBCR & FBCR_FCT))
+  {
+   /* VRAM[0]=0x8000 means the game is mid-way through its rolling command-table
+    * update cycle (it sets VRAM[0] to end-of-list as an invalidation flag at the
+    * start of each write burst, then restores it to 0x0009/SetSystemClip when
+    * done). Drawing from an incomplete command table produces a black frame.
+    * Skip swap+fill+draw this vblank and reuse the previous frame's buffer —
+    * sprites remain visible, at most 1 frame stale at 60fps (imperceptible).
+    *
+    * Exception: in manual-trigger mode (FCT=1) the game synchronized the swap
+    * explicitly — honor it unconditionally.  VRAM[0]=0x8000 may simply be the
+    * game's final command-list state (empty list = VDP2-only screen), not a
+    * write-in-progress flag. */
+   if(MDFN_UNLIKELY(!(FBCR & FBCR_FCT) && (VRAM[0] & 0x8000)))
+   {
+    /* Keep LateSwapActive so the leaving-vblank guard suppresses the standard
+     * re-swap, and keep the old draw buffer as-is. */
+   }
+   else
+   {
+#if 1
+    if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1VRAM5000FIX) && DrawingActive && VRAM[0] == 0x5000 && VRAM[1] == 0x0000))
+     VRAM[0] = 0x8000;
+#endif
+
+    if(DrawingActive)
+    {
+     SS_DBGTI(SS_DBG_WARNING | SS_DBG_VDP1, "[VDP1] Drawing aborted by VDP1LATESWAP swap.");
+     DrawingActive = false;
+     VRAMUsageEnd();
+    }
+
+    FBDrawWhich = !FBDrawWhich;
+    FBDrawWhichPtr = FB[FBDrawWhich];
+
+    EDSR = EDSR >> 1;
+    LOPR = CurCommandAddr >> 2;
+
+    EraseParams.rot8 = (TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE);
+    EraseParams.fb_x_mask = EraseParams.rot8 ? 0xFF : 0x1FF;
+    EraseParams.y_start = EWLR & 0x1FF;
+    EraseParams.x_start = ((EWLR >> 9) & 0x3F) << 3;
+    EraseParams.y_end = EWRR & 0x1FF;
+    EraseParams.x_bound = ((EWRR >> 9) & 0x7F) << 3;
+    EraseParams.fill_data = EWDR;
+
+    /* Freeze command-table VRAM before the CPU's vblank handler can update it.
+     * Any CPU write that arrives after this point (during vblank) goes to live
+     * VRAM but the draw loop reads from the snapshot → no next-frame contamination. */
+    memcpy(VRAMCmdSnapshot, VRAM, sizeof(VRAMCmdSnapshot));
+
+    std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
+
+    /* Draw immediately if PTMR deferred-draw bit is already set; otherwise
+     * set LateSwapNeedsDraw so the PTMR write handler (below) starts drawing
+     * whenever the game writes PTMR=0x02, even during active display. */
+    if(PTMR & 0x2)
+    {
+     LateSwapNeedsDraw = false;
+     StartDrawing();
+     SS_SetEventNT(&events[SS_EVENT_VDP1], Update(event_timestamp));
+    }
+    else
+    {
+     LateSwapNeedsDraw = true;
+    }
+   } /* end VRAM[0] valid check */
+  }
+
+  EraseYCounter = ~0U;
+  if(!(FBCR & FBCR_FCM) || (FBManualPending && !(FBCR & FBCR_FCT)))
+  {
+   if(TVMR & TVMR_ROTATE)
+    FBVBErasePending = true;
+   else
+    EraseYCounter = EraseParams.y_start;
+  }
+  FBManualPending = false;
+ }
 }
 
 bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y, uint32 rot_xinc, uint32 rot_yinc)
@@ -1054,9 +1331,21 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  //
  //
  //
+ /* Select which frame buffer to display this scanline:
+  * - Standard path: read the previously completed frame (!FBDrawWhich).
+  * - VDP1INSTANT: draw finishes before GetLine(0), always show FBDrawWhich.
+  * - VDP1LATESWAP: DisplayFBWhich is locked at leaving-VB — if the draw was
+  *   still running at that point (430+ cmds spill into active display) we
+  *   show !FBDrawWhich (old complete frame) to avoid reading a partial draw. */
+ const unsigned fbsel = (ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP)
+                         ? (unsigned)DisplayFBWhich
+                         : (ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
+                           ? (unsigned)FBDrawWhich
+                           : (unsigned)!FBDrawWhich;
+
  if(TVMR & TVMR_ROTATE)
  {
-  const uint16* fbptr = FB[!FBDrawWhich];
+  const uint16* fbptr = FB[fbsel];
 
   if(TVMR & TVMR_8BPP)
   {
@@ -1098,12 +1387,23 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  }
  else
  {
-  const uint16* fbyptr = &FB[!FBDrawWhich][(line & 0xFF) << 9];
+  const uint16* fbyptr = &FB[fbsel][(line & 0xFF) << 9];
 
   if(TVMR & TVMR_8BPP)
    ret = true;
 
-  memcpy(buf, fbyptr, (size_t)w * sizeof(uint16));
+  /* VDP1INSTANT: composite both frame buffers so that alternating draw lists
+   * (long-list / short-list frames) both appear every scanline.  The previous
+   * buffer still holds the complement tiles from the last frame; it is erased
+   * at the NEXT early-swap, so it is guaranteed valid here. */
+  if(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
+  {
+   const uint16* fbyptr2 = &FB[fbsel ^ 1][(line & 0xFF) << 9];
+   for(unsigned i = 0; i < w; i++)
+    buf[i] = fbyptr[i] ? fbyptr[i] : fbyptr2[i];
+  }
+  else
+   memcpy(buf, fbyptr, (size_t)w * sizeof(uint16));
  }
 
  //
@@ -1115,7 +1415,7 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
   * the current scanline), so when y_start > 0 it runs ahead of VDP2:
   * GetLine(0) would erase row y_start before VDP2 reads it, producing
   * transparent stripes in the middle of fast-moving sprites/polygons. */
- if(!(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) && EraseYCounter <= EraseParams.y_end)
+ if(!(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)) && EraseYCounter <= EraseParams.y_end)
  {
   uint16* fbyptr;
   uint32 x = EraseParams.x_start;
@@ -1182,9 +1482,9 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	  * With VDP1INSTANT, each manual restart must get a fresh budget so that
 	  * mid-frame command-list updates (typical in fighters after CPU prepares
 	  * new sprite data) draw completely instead of aborting mid-list. */
-	 if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT))
+	 if(MDFN_UNLIKELY(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)))
 	 {
-	  InstantDrawSanityLimit = 1000000;
+	  InstantDrawSanityLimit = 10000000;
 	  /* Erase the draw buffer before the manual pass so that stale pixels from
 	   * the preceding auto vblank-out pass do not bleed through when sprites have
 	   * moved.  On real hardware the auto pass is interrupted before completion by
@@ -1193,6 +1493,16 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	   * Guard against degenerate EraseParams (x_bound==0 or empty y range). */
 	  std::fill_n(FB[FBDrawWhich], 0x20000, EraseParams.fill_data);
 	 }
+	 StartDrawing();
+	 nt = SH7095_mem_timestamp + 1;
+	}
+	/* LATESWAP: game writes PTMR=0x02 (deferred-draw-on-swap) any time after
+	 * the vblank-start swap.  This can happen during vblank OR during early
+	 * active display — LateSwapNeedsDraw stays true until we actually draw. */
+	if(MDFN_UNLIKELY((value & 0x2) && (ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && LateSwapNeedsDraw))
+	{
+	 LateSwapNeedsDraw = false;
+	 InstantDrawSanityLimit = 10000000;
 	 StartDrawing();
 	 nt = SH7095_mem_timestamp + 1;
 	}
@@ -1300,6 +1610,12 @@ MDFN_FASTCALL void Write8_DB(uint32 A, uint16 DB)
   VRAMUsageWrite(A >> 1);
   SS_DBGTI(SS_DBG_VDP1_VRAMW, "[VDP1] Write to VRAM: 0x%02x->VRAM[0x%05x]", (DB >> (((A & 1) ^ 1) << 3)) & 0xFF, A);
   ne16_wbo_be<uint8>(VRAM, A, DB >> (((A & 1) ^ 1) << 3) );
+  if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) && (A >> 1) < 0x4000))
+  {
+   VRAMCmdWriteFrame[A >> 1] = VDP1FrameNum;
+   VRAMCmdWrittenThisScanline = true;
+   VRAMCmdSeenAnyWrite = true;
+  }
   return;
  }
 
@@ -1328,7 +1644,14 @@ MDFN_FASTCALL void Write16_DB(uint32 A, uint16 DB)
  {
   VRAMUsageWrite(A >> 1);
   SS_DBGTI(SS_DBG_VDP1_VRAMW, "[VDP1] Write to VRAM: 0x%04x->VRAM[0x%05x]", DB, A);
+
   VRAM[A >> 1] = DB;
+  if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) && (A >> 1) < 0x4000))
+  {
+   VRAMCmdWriteFrame[A >> 1] = VDP1FrameNum;
+   VRAMCmdWrittenThisScanline = true;
+   VRAMCmdSeenAnyWrite = true;
+  }
   return;
  }
 
@@ -1517,10 +1840,20 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(DTACounter),
 
   SFVAR(vbcdpending),
+  SFVAR(LateSwapPending),
+  SFVAR(LateSwapActive),
+  SFVAR(LateSwapNeedsDraw),
+  SFVAR(DisplayFBWhich),
 
   SFVAR(LastRWTS),
 
   SFVAR(InstantDrawSanityLimit),
+
+  SFVAR(VRAMCmdSnapshot),
+  SFVAR(VDP1FrameNum),
+  SFVAR(VRAMCmdWrittenThisScanline),
+  SFVAR(VRAMCmdSeenAnyWrite),
+  SFVAR(VDP1InstantDrawDoneThisFrame),
 
   SFLINK(Prim_StateRegs),
 
@@ -1534,6 +1867,14 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   CurCommandAddr &= 0x3FFFF;
   if(RetCommandAddr >= 0)
    RetCommandAddr &= 0x3FFFF;
+
+  /* After load, treat all command slots as stale so the first frame uses
+   * the restored VRAMCmdSnapshot as-is without mixing in live VRAM writes
+   * from a previous session. */
+  memset(VRAMCmdWriteFrame, 0, sizeof(VRAMCmdWriteFrame));
+  VRAMCmdWrittenThisScanline = false;
+  VRAMCmdSeenAnyWrite = false;
+  VDP1InstantDrawDoneThisFrame = false;
 
   DTACounter &= 0xFF;
 
