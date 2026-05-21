@@ -548,7 +548,7 @@ static INLINE int32 AddHCounter(const sscpu_timestamp_t event_timestamp, int32 c
     }
     //printf("%d, 0x%08x(%f) 0x%08x(%f)\n", VCounter, RotParams[0].KAstAccum >> 10, (int32)RotParams[0].DKAst / 1024.0, RotParams[1].KAstAccum >> 10, (int32)RotParams[1].DKAst / 1024.0);
     //printf("DL: %d\n", VCounter);
-    lib->vdp1_hires8 = VDP1::GetLine(VCounter, lib->vdp1_line, (HRes & 1) ? 352 : 320, (int32)RotParams[0].XstAccum >> 1, (int32)RotParams[0].YstAccum >> 1, (int32)RotParams[0].DX >> 1, (int32)RotParams[0].DY >> 1); // Always call, has side effects.
+    lib->vdp1_hires8 = VDP1::GetLine(VCounter, lib->vdp1_line, lib->vdp1_mesh_line, (HRes & 1) ? 352 : 320, (int32)RotParams[0].XstAccum >> 1, (int32)RotParams[0].YstAccum >> 1, (int32)RotParams[0].DX >> 1, (int32)RotParams[0].DY >> 1); // Always call, has side effects.
     VDP2REND_DrawLine(InternalVB ? -1 : VCounter, CRTLineCounter, !Odd);
     CRTLineCounter++;
    }

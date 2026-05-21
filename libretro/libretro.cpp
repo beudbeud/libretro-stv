@@ -24,6 +24,7 @@
 #include "video/Deinterlacer.h"
 
 #include "ss/ss.h"
+#include "ss/vdp1.h"
 #include "ss/vdp1_common.h"
 #include "ss/vdp2.h"
 
@@ -262,6 +263,9 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_blend", "Horizontal Blend Filter", NULL, NULL, NULL, "video",
       { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_mesh_transparency", "Improved Mesh Transparency", NULL,
+      "Replace VDP1's hardware-accurate (x ^ y) & 1 stipple, used by mesh-bit primitives, with a 50% blend against the final composited image. The stipple looks like a visible checkerboard on a flat panel (it relied on CRT phosphor blur); the blend improves the look of smoke, shadows, water and fade effects. 16-bit framebuffer only.", NULL, "video",
+      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_slstart", "First Scanline (NTSC)", NULL, NULL, NULL, "video",
@@ -327,6 +331,14 @@ static void apply_options()
     STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
 #undef BOOL_OPT
 #undef STR_OPT
+
+    /* Improved mesh transparency: forwarded to VDP1::SetMeshImproved,
+     * which sets a module-level bool read by VDP1 rasterisation and
+     * VDP2 compositing. Called on the emulator main thread, same
+     * thread that runs the renderer, so no synchronisation needed. */
+    var.key = "mednafen_stv_mesh_transparency";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        MDFN_IEN_SS::VDP1::SetMeshImproved(strcmp(var.value, "enabled") == 0);
 
     var.key = "mednafen_stv_frameskip";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {

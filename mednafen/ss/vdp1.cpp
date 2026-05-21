@@ -144,6 +144,30 @@ static uint32 VDP1FrameNum; // incremented at each VDP1INSTANT early-swap
 static bool VRAMCmdWrittenThisScanline; // cleared each HBlank rising edge
 static bool VRAMCmdSeenAnyWrite;        // true once CPU writes any command VRAM this active period
 static bool VDP1InstantDrawDoneThisFrame; // inactivity snapshot already taken; use it in Block 2
+
+// Side-buffer for "improved mesh transparency" mode. When MeshImproved
+// is true, VDP1 mesh-bit primitives write their raw texel here instead
+// of the main FB. Non-mesh primitives in improved mode clear MeshFB at
+// their pixel position so opaque writes properly cover earlier mesh
+// content. VDP2's MixIt path reads this via VDP1::GetLine and 50%-blends
+// the mesh pixel over the final composited surface, matching Kronos's
+// "outMeshSurface" side-buffer + late composite mechanism.
+//
+// Double-buffered in lockstep with FB; MeshFBDrawWhichPtr tracks
+// MeshFB[FBDrawWhich]. Erased in the same loops that erase FB, plus
+// unconditionally on FB swap (mesh data is transient by nature).
+uint16 MeshFB[2][0x20000];
+uint16* MeshFBDrawWhichPtr;
+
+// Module-level toggle for the "improved mesh transparency" mode.
+// Read by PlotPixel in vdp1_common.h when its MeshEn template
+// arg is true. Default false = hardware-accurate stipple.
+bool MeshImproved = false;
+
+void SetMeshImproved(bool improved)
+{
+ MeshImproved = improved;
+}
 //
 //
 //
@@ -319,6 +343,8 @@ void Reset(bool powering_up)
  FBDrawWhich = 0;
  DisplayFBWhich = 0;
  FBDrawWhichPtr = FB[FBDrawWhich];
+ MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
+ memset(MeshFB, 0, sizeof(MeshFB));
  //SS_SetPhysMemMap(0x05C80000, 0x05CFFFFF, FB[FBDrawWhich], sizeof(FB[0]), true);
 
  FBManualPending = false;
@@ -1019,17 +1045,26 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
     do
     {
      uint16* fbyptr;
+     uint16* mfbyptr;
      uint32 x = EraseParams.x_start;
 
      fbyptr = &FB[!FBDrawWhich][(y & 0xFF) << 9];
+     mfbyptr = &MeshFB[!FBDrawWhich][(y & 0xFF) << 9];
      if(EraseParams.rot8)
+     {
       fbyptr += (y & 0x100);
+      mfbyptr += (y & 0x100);
+     }
 
      do
      {
       for(unsigned sub = 0; sub < 8; sub++)
       {
        fbyptr[x & EraseParams.fb_x_mask] = EraseParams.fill_data;
+       // Clear the mesh side-buffer in lockstep with the main FB.
+       // Mesh side-buffer always erases to 0 (the "no mesh pixel
+       // here" marker) regardless of the game's FB fill colour.
+       mfbyptr[x & EraseParams.fb_x_mask] = 0;
        x++;
       }
      } while(x < EraseParams.x_bound);
@@ -1057,6 +1092,15 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
 
     FBDrawWhich = !FBDrawWhich;
     FBDrawWhichPtr = FB[FBDrawWhich];
+    MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
+
+    // Unconditionally clear the new draw side of MeshFB. Game-driven
+    // erase (VB erase, per-scanline GetLine erase) is gated on the
+    // game's FBCR/EraseParams settings, which won't fire if the game
+    // uses manual buffer management. Mesh data is transient by nature
+    // - we always want a fresh slate per frame.
+    if(MeshImproved)
+     memset(MeshFBDrawWhichPtr, 0, sizeof(MeshFB[0]));
 
     SS_DBGTI(SS_DBG_VDP1, "[VDP1] Displayed framebuffer changed to %d.", !FBDrawWhich);
 
@@ -1325,7 +1369,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
  }
 }
 
-bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y, uint32 rot_xinc, uint32 rot_yinc)
+bool GetLine(const int line, uint16* buf, uint16* mesh_buf, unsigned w, uint32 rot_x, uint32 rot_y, uint32 rot_xinc, uint32 rot_yinc)
 {
  bool ret = false;
  //
@@ -1346,6 +1390,7 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  if(TVMR & TVMR_ROTATE)
  {
   const uint16* fbptr = FB[fbsel];
+  const uint16* mfbptr = MeshFB[fbsel];
 
   if(TVMR & TVMR_8BPP)
   {
@@ -1355,13 +1400,22 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
     const uint32 fb_y = rot_y >> 9;
 
     if((fb_x | fb_y) &~ 0x1FF)
+    {
      buf[i] = 0;	// Not 0xFF00
+     mesh_buf[i] = 0;
+    }
     else
     {
      const uint16* fbyptr = fbptr + ((fb_y & 0xFF) << 9);
      uint8 tmp = ne16_rbo_be<uint8>(fbyptr, (fb_x & 0x1FF) | ((fb_y & 0x100) << 1));
 
      buf[i] = 0xFF00 | tmp;
+     // 8bpp paletted mode never routes mesh to the side-buffer
+     // (PlotPixel gates improved mesh on the 16bpp path only), so
+     // MeshFB is guaranteed clear here -- read it anyway in case
+     // mode bits changed mid-frame.
+     const uint16* mfbyptr = mfbptr + ((fb_y & 0xFF) << 9);
+     mesh_buf[i] = ne16_rbo_be<uint8>(mfbyptr, (fb_x & 0x1FF) | ((fb_y & 0x100) << 1));
     }
 
     rot_x += rot_xinc;
@@ -1376,9 +1430,15 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
     const uint32 fb_y = rot_y >> 9;
 
     if((fb_x &~ 0x1FF) | (fb_y &~ 0xFF))
+    {
      buf[i] = 0;
+     mesh_buf[i] = 0;
+    }
     else
+    {
      buf[i] = fbptr[(fb_y << 9) + fb_x];
+     mesh_buf[i] = mfbptr[(fb_y << 9) + fb_x];
+    }
 
     rot_x += rot_xinc;
     rot_y += rot_yinc;
@@ -1388,6 +1448,7 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  else
  {
   const uint16* fbyptr = &FB[fbsel][(line & 0xFF) << 9];
+  const uint16* mfbyptr = &MeshFB[fbsel][(line & 0xFF) << 9];
 
   if(TVMR & TVMR_8BPP)
    ret = true;
@@ -1401,9 +1462,27 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
    const uint16* fbyptr2 = &FB[fbsel ^ 1][(line & 0xFF) << 9];
    for(unsigned i = 0; i < w; i++)
     buf[i] = fbyptr[i] ? fbyptr[i] : fbyptr2[i];
+
+   // Mesh side-buffer mirrors the same dual-buffer composite so mesh
+   // pixels from the complement draw list aren't lost. 0 = no mesh
+   // pixel here, same "has content" test as the main FB above.
+   if(MeshImproved)
+   {
+    const uint16* mfbyptr2 = &MeshFB[fbsel ^ 1][(line & 0xFF) << 9];
+    for(unsigned i = 0; i < w; i++)
+     mesh_buf[i] = mfbyptr[i] ? mfbyptr[i] : mfbyptr2[i];
+   }
   }
   else
+  {
    memcpy(buf, fbyptr, (size_t)w * sizeof(uint16));
+   // The MeshFB row is only ever read by ApplyMeshOverlay
+   // (vdp2_render), itself gated on VDP1::MeshImproved. When the
+   // option is off this memcpy lands in a buffer nothing reads --
+   // skip it to avoid dead copy traffic in the default state.
+   if(MeshImproved)
+    memcpy(mesh_buf, mfbyptr, (size_t)w * sizeof(uint16));
+  }
  }
 
  //
@@ -1418,17 +1497,23 @@ bool GetLine(const int line, uint16* buf, unsigned w, uint32 rot_x, uint32 rot_y
  if(!(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)) && EraseYCounter <= EraseParams.y_end)
  {
   uint16* fbyptr;
+  uint16* mfbyptr;
   uint32 x = EraseParams.x_start;
 
   fbyptr = &FB[!FBDrawWhich][(EraseYCounter & 0xFF) << 9];
+  mfbyptr = &MeshFB[!FBDrawWhich][(EraseYCounter & 0xFF) << 9];
   if(EraseParams.rot8)
+  {
    fbyptr += (EraseYCounter & 0x100);
+   mfbyptr += (EraseYCounter & 0x100);
+  }
 
   do
   {
    for(unsigned sub = 0; sub < 2; sub++)
    {
     fbyptr[x & EraseParams.fb_x_mask] = EraseParams.fill_data;
+    mfbyptr[x & EraseParams.fb_x_mask] = 0;
     x++;
    }
   } while(x < EraseParams.x_bound);
@@ -1786,6 +1871,7 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
  {
   SFVAR(VRAM),
   SFVARN(FB, "&FB[0][0]"),
+  SFVARN(MeshFB, "&MeshFB[0][0]"),
   SFVAR(FBDrawWhich),
 
   SFVAR(FBManualPending),
@@ -1887,6 +1973,7 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   EraseParams.x_bound &= 0x7F << 3;
   //
   FBDrawWhichPtr = FB[FBDrawWhich];
+  MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
 
   if(load < 0x00102500)
   {

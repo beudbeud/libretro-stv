@@ -47,6 +47,19 @@ MDFN_HIDE extern uint16 VRAM[0x40000];
 MDFN_HIDE extern uint16 FB[2][0x20000];
 MDFN_HIDE extern uint16* FBDrawWhichPtr;
 
+// Mesh side-buffer for improved-mesh-transparency mode. See vdp1.cpp
+// for full description. Same dimensions as FB; MeshFBDrawWhichPtr
+// tracks MeshFB[FBDrawWhich] so PlotPixel can address the active
+// draw side without re-computing the index.
+MDFN_HIDE extern uint16 MeshFB[2][0x20000];
+MDFN_HIDE extern uint16* MeshFBDrawWhichPtr;
+
+// "Improved mesh transparency" toggle (libretro core option).
+// Read by PlotPixel inside its MeshEn=true template path. False =
+// hardware-accurate stipple; true = route mesh pixels to MeshFB for
+// a composite-time 50% blend. Storage is in vdp1.cpp.
+MDFN_HIDE extern bool MeshImproved;
+
 MDFN_HIDE extern int32 SysClipX, SysClipY;
 MDFN_HIDE extern int32 UserClipX0, UserClipY0, UserClipX1, UserClipY1;
 MDFN_HIDE extern int32 LocalX, LocalY;
@@ -226,7 +239,20 @@ static INLINE int32 PlotPixel(int32 x, int32 y, uint16 pix, bool transparent, Go
  }
 
  if(MeshEn)
-  transparent |= (x ^ y) & 1;
+ {
+  // Hardware-accurate stipple: discard every other pixel in a
+  // checker pattern. Visible as a checker on a flat panel (CRT
+  // phosphors would have blurred it). Skipped only in the 16-bit
+  // framebuffer path when the libretro "improved mesh" option is
+  // on -- there we keep every mesh pixel and route it to the mesh
+  // side-buffer (MeshFB) instead of the main FB. VDP2 MixIt reads
+  // the side-buffer back through VDP1::GetLine and 50%-blends the
+  // mesh pixel onto the final composited surface. The 8-bit
+  // framebuffer path keeps the stipple regardless because a 50%
+  // blend of palette indices is meaningless.
+  if(bpp8 || !MeshImproved)
+   transparent |= (x ^ y) & 1;
+ }
 
  if(bpp8)
  {
@@ -308,8 +334,48 @@ static INLINE int32 PlotPixel(int32 x, int32 y, uint16 pix, bool transparent, Go
    }
   }
 
-  if(!transparent)
-   *p = pix;
+  // Mesh-improved write routing.
+  //
+  // Mesh-bit primitive in the simple (no MSBOn, no HalfBGEn, no
+  // HalfFGEn) combo: write the texel to the mesh side-buffer
+  // instead of the main FB so MixIt can blend it on top of the
+  // final composited surface. We store the RAW texel value (the
+  // same thing VDP2's sprite layer reads from FB) so the late-
+  // composite path in vdp2_render.cpp can do the correct CRAM
+  // lookup for paletted modes. 0 means "no mesh pixel here",
+  // matching the erase fill; transparent pixels are filtered out
+  // by !transparent. The main FB is NOT touched, so prior VDP1
+  // content underneath remains visible through the eventual blend.
+  //
+  // Non-mesh primitive in improved mode: clear the mesh side-
+  // buffer at this position so a fresh opaque pixel properly
+  // overrides any earlier mesh content (matches Kronos's
+  // vdp1_draw_no_mesh_improved_f writing vec4(0.0) to outMeshSurface).
+  //
+  // MSBOn / HalfBGEn / HalfFGEn combos with the mesh bit set stay
+  // on the hardware-accurate stipple -- their FB read-modify-write
+  // semantics for shadow / half-transparency wouldn't compose
+  // cleanly with the side-buffer routing, and real-world mesh use
+  // overwhelmingly hits the plain combo handled here.
+  if(MeshEn && !MSBOn && !HalfBGEn && !HalfFGEn && MeshImproved)
+  {
+   if(!transparent)
+   {
+    const uint32 row = die ? ((y >> 1) & 0xFF) : (y & 0xFF);
+    MeshFBDrawWhichPtr[(row << 9) + (x & 0x1FF)] = pix;
+   }
+  }
+  else
+  {
+   if(!transparent)
+    *p = pix;
+
+   if(!MeshEn && MeshImproved && !transparent)
+   {
+    const uint32 row = die ? ((y >> 1) & 0xFF) : (y & 0xFF);
+    MeshFBDrawWhichPtr[(row << 9) + (x & 0x1FF)] = 0;
+   }
+  }
 
   ret++;
  }
