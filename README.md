@@ -11,11 +11,11 @@ The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, includ
 ### 315-5881 encryption chip
 | Game | Status |
 |------|--------|
-| Astra SuperStars | Boot, Imperfect |
+| Astra SuperStars | Working |
 | Final Fight Revenge | Boot, Imperfect |
-| Steep Slope Sliders | Unknown |
+| Steep Slope Sliders | Black screen |
 | Tecmo World Cup '98 | No Boot |
-| Touryuu Densetsu Elan Doree | Unknown |
+| Touryuu Densetsu Elan Doree | Working |
 
 ### 315-5838 decompression + encryption chip
 | Game |
@@ -82,9 +82,14 @@ Tate (vertical cabinet) games are detected automatically from the game database 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `mednafen_stv_region` | `auto` | BIOS region: Auto / Japan / North America / Europe |
+| `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation |
 | `mednafen_stv_h_overscan` | `enabled` | Show horizontal overscan pixels |
 | `mednafen_stv_h_blend` | `disabled` | Horizontal blend filter (anti-dithering) |
 | `mednafen_stv_correct_aspect` | `enabled` | Correct pixel aspect ratio |
+| `mednafen_stv_mesh_transparency` | `disabled` | Improved mesh transparency (CPU-side, ported from Kronos) |
+| `mednafen_stv_deinterlacer` | `disabled` | 480i deinterlacer: disabled / bob (renderer) / bob (SW) |
+| `mednafen_stv_vdp1_instant` | `disabled` | VDP1INSTANT: reduces frame lag and eliminates stripe artifacts |
+| `mednafen_stv_frameskip` | `disabled` | Frameskip: disabled / auto / 1–5 |
 | `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0–239) |
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (0–239) |
 | `mednafen_stv_cart` | `auto` | Expansion cart: Auto / None / Backup RAM / 4M RAM / 8M RAM |
@@ -111,6 +116,12 @@ cmake --build build_lr -j$(nproc)
 
 ```bash
 make -f libretro/Makefile.libretro TARGET_CROSS=aarch64-buildroot-linux-gnu-
+```
+
+### Android (arm64-v8a)
+
+```bash
+make -f libretro/Makefile.libretro platform=android_arm64
 ```
 
 **Note on zstd linking:** cross-compile uses dynamic `libzstd.so`; native builds link static `libzstd.a` to avoid a runtime dependency.
