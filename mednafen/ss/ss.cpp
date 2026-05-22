@@ -776,6 +776,11 @@ static NO_INLINE MDFN_COLD int32 RunLoop_Debug(EmulateSpecStruct* espec)
 #endif
 
 // Must not be called within an event or read/write handler.
+uint32 SS_GetMasterPC(void)
+{
+ return CPU[0].PC;
+}
+
 void SS_Reset(bool powering_up)
 {
  SH7095_BusLock = 0;
