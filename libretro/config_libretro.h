@@ -96,7 +96,9 @@
 #define HAVE_SYS_STAT_H         1
 #define HAVE_SYS_TYPES_H        1
 #define HAVE_PTHREAD_H          1
-#define HAVE_ICONV_H            1
+#ifndef __ANDROID__
+# define HAVE_ICONV_H           1
+#endif
 #define HAVE_DIRENT_H           1
 
 /* ── POSIX functions ─────────────────────────────────────────────────────── */

@@ -8,9 +8,10 @@
 
 TARGET_NAME := mednafen_stv
 CORE_DIR    := $(CURDIR)
-BUILD_DIR   := $(CORE_DIR)/build_libretro
 
 platform ?= unix
+
+BUILD_DIR   := $(CORE_DIR)/build_libretro/$(platform)
 
 USE_BUNDLED_ZSTD :=
 

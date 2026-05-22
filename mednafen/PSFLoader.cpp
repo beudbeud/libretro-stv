@@ -31,7 +31,9 @@
 #include <mednafen/string/string.h>
 
 #include <trio/trio.h>
-#include <iconv.h>
+#ifdef HAVE_ICONV_H
+# include <iconv.h>
+#endif
 
 #include <zlib.h>
 
@@ -140,6 +142,7 @@ void PSFTags::LoadTags(Stream* fp)
  //
  // Detect possible SJIS encoding, and convert tags.
  //
+#ifdef HAVE_ICONV_H
  {
   bool possibly_sjis = true;
   iconv_t sjis_utf8_cd;
@@ -185,6 +188,7 @@ void PSFTags::LoadTags(Stream* fp)
   if(possibly_sjis)
    return;
  }
+#endif
 }
 
 int64 PSFTags::GetTagI(const char *name)
