@@ -7,11 +7,12 @@
  * Two 4-round Feistel Networks operating in counter mode.
  * Optional LZ-style decompression of the decrypted stream.
  *
- * ST-V register map (iomap_le offsets from chip base 0x04000000):
- *   +0x08 write → addrlo_w  (source address low 16 bits)
- *   +0x0a write → addrhi_w  (source address high 16 bits, always 0 on ST-V)
- *   +0x0c write → subkey_w  (16-bit sequence key)
- *   +0x0e read  → decrypt_r (next decrypted 16-bit word, LE byte-swapped)
+ * ST-V register map (SH-2 address space, 16-bit access):
+ *   0x04FFFFF0-3 r/w → config register (echoed on read, no enable-bit logic)
+ *   0x04FFFFF8   write → addr_low  (source address bits [15:0])
+ *   0x04FFFFFA   write → addr_high (source address bits [31:16])
+ *   0x04FFFFFC   write → subkey    (16-bit sequence key, arms cipher)
+ *   0x04FFFFFC   read  → decrypt_r (next decrypted 16-bit word)
  */
 
 #ifndef __MDFN_SS_CART_CHIP315_5881_H
@@ -81,7 +82,7 @@ struct Chip5881
  uint32_t prot_cur_address;
  uint16_t subkey;
  uint32_t game_key;
- uint32_t protenable;  /* bit 0x00010000 = chip enabled (MAME m_abus_protenable) */
+ uint32_t protenable;  /* config register at offset 0 — echoed on read, no enable-bit logic */
  uint16_t a_bus[8];    /* mirror of last-written words at offsets 0x04FFFFF0-FE (MAME m_a_bus) */
 
  bool     enc_ready;
