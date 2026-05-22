@@ -125,6 +125,7 @@ namespace MDFN_IEN_SS
  void SS_RequestMLExit(void);
  void SS_RequestEHLExit(void);
  void ForceEventUpdates(const sscpu_timestamp_t timestamp);
+ uint32 SS_GetMasterPC(void);
 
  enum
  {

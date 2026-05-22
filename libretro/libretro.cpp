@@ -23,6 +23,8 @@
 #include "video/surface.h"
 #include "video/Deinterlacer.h"
 
+#include "FileStream.h"
+
 #include "ss/ss.h"
 #include "ss/vdp1.h"
 #include "ss/vdp1_common.h"
@@ -65,6 +67,20 @@ static uint8_t pad_data[2][32] = {};
 static uint8_t *port_ptr[2]    = {};
 
 static std::string sys_dir, save_dir;
+
+/* ── BIOS Skip ─────────────────────────────────────────────────────────────── */
+static bool        g_stv_skip_bios    = false;
+static bool        g_bios_state_saved = false;
+static std::string g_bios_state_path;
+/* Game-start detection: count transitions INTO BIOS ROM (PC < 0x00200000).
+ * Two paths trigger a state save:
+ *   - 2+ BIOS ROM entries seen, then 60+ frames pass  (games that revisit ROM)
+ *   - PC jumps > 0x30000 bytes from its initial Work RAM address  (single-visit) */
+static int         g_bios_total_frames   = 0;
+static int         g_last_bios_rom_frame = 0;
+static int         g_bios_rom_visits     = 0;
+static bool        g_was_in_bios_rom     = false;
+static uint32_t    g_bios_wram_base_pc   = 0;
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -287,6 +303,9 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_frameskip", "Frameskip", NULL,
       "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
       { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
+      "Boot directly into the game, bypassing the ST-V BIOS startup sequence. On first boot the BIOS runs normally and a state is cached; subsequent boots load that state instantly. The cache is stored per-game in the save directory. Restart required after toggling.", NULL, "system",
+      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
       "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
       { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
@@ -336,6 +355,10 @@ static void apply_options()
      * which sets a module-level bool read by VDP1 rasterisation and
      * VDP2 compositing. Called on the emulator main thread, same
      * thread that runs the renderer, so no synchronisation needed. */
+    var.key = "mednafen_stv_skip_bios";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        g_stv_skip_bios = (strcmp(var.value, "enabled") == 0);
+
     var.key = "mednafen_stv_mesh_transparency";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         MDFN_IEN_SS::VDP1::SetMeshImproved(strcmp(var.value, "enabled") == 0);
@@ -519,6 +542,32 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
      * correctly takes effect for the VDP2 half. */
     apply_options();
 
+    /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
+    g_bios_state_saved    = false;
+    g_bios_total_frames   = 0;
+    g_last_bios_rom_frame = 0;
+    g_bios_rom_visits     = 0;
+    g_was_in_bios_rom     = false;
+    g_bios_wram_base_pc   = 0;
+    g_bios_state_path.clear();
+    if(g_stv_skip_bios) {
+        char md5_hex[33] = {};
+        for(int i = 0; i < 16; i++)
+            snprintf(md5_hex + i * 2, 3, "%02x", (unsigned char)game_info->MD5[i]);
+        md5_hex[32] = '\0';
+        g_bios_state_path = save_dir + "/" + md5_hex + "_biosstate.mcs";
+
+        try {
+            Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_READ);
+            MDFNSS_LoadSM(&st, false);
+            g_bios_state_saved = true; /* already cached, no need to re-save */
+            lr_log(RETRO_LOG_INFO, "[skip_bios] Loaded cached state: %s\n", g_bios_state_path.c_str());
+        } catch(...) {
+            /* No cached state yet — will boot through BIOS and auto-save. */
+            lr_log(RETRO_LOG_INFO, "[skip_bios] No cached state, booting through BIOS to create it.\n");
+        }
+    }
+
     /* Initialize ALL ports declared by the SS module (0..N-1).
      * ST-V has 13 ports (port12 = "builtin"). Without initializing all
      * of them, DPtr[12] stays nullptr → STVIO_TransformInput() crashes
@@ -658,6 +707,13 @@ RETRO_API void retro_unload_game(void)
     port_ptr[0] = port_ptr[1] = nullptr;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
+    g_bios_state_saved    = false;
+    g_bios_total_frames   = 0;
+    g_last_bios_rom_frame = 0;
+    g_bios_rom_visits     = 0;
+    g_was_in_bios_rom     = false;
+    g_bios_wram_base_pc   = 0;
+    g_bios_state_path.clear();
 }
 
 RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
@@ -728,6 +784,42 @@ RETRO_API void retro_run(void)
     espec.NeedRewind      = false;
 
     MDFNI_Emulate(&espec);
+
+    if(g_stv_skip_bios && !g_bios_state_saved && !g_bios_state_path.empty()) {
+        ++g_bios_total_frames;
+        const uint32_t pc = MDFN_IEN_SS::SS_GetMasterPC();
+        const bool in_bios_rom = (pc < 0x00200000u);
+
+        if(in_bios_rom && !g_was_in_bios_rom) {
+            ++g_bios_rom_visits;
+            g_last_bios_rom_frame = g_bios_total_frames;
+            g_bios_wram_base_pc   = 0;
+        }
+        g_was_in_bios_rom = in_bios_rom;
+
+        if(g_bios_rom_visits >= 1 && !in_bios_rom && g_bios_wram_base_pc == 0)
+            g_bios_wram_base_pc = pc;
+
+        const int gap = g_bios_total_frames - g_last_bios_rom_frame;
+        bool game_running = (g_bios_rom_visits >= 2 && gap >= 60);
+        if(!game_running && g_bios_wram_base_pc != 0 && !in_bios_rom) {
+            const uint32_t diff = (pc >= g_bios_wram_base_pc)
+                ? (pc - g_bios_wram_base_pc) : (g_bios_wram_base_pc - pc);
+            game_running = (diff >= 0x30000);
+        }
+
+        if(game_running) {
+            try {
+                Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
+                MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
+                g_bios_state_saved = true;
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state cached: %s\n", g_bios_state_path.c_str());
+            } catch(...) {
+                g_bios_state_saved = true;
+                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state: %s\n", g_bios_state_path.c_str());
+            }
+        }
+    }
 
     /* Deinterlace handling. Both paths yield a progressive full-height surface
      * — clear InterlaceOn either way so the geometry/video_cb code below sees
