@@ -12,9 +12,9 @@ The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, includ
 | Game | Status |
 |------|--------|
 | Astra SuperStars | Working |
-| Final Fight Revenge | Boot, Imperfect |
-| Steep Slope Sliders | Black screen |
-| Tecmo World Cup '98 | No Boot |
+| Final Fight Revenge | Working |
+| Steep Slope Sliders | Working |
+| Tecmo World Cup '98 | Working |
 | Touryuu Densetsu Elan Doree | Working |
 
 ### 315-5838 decompression + encryption chip
