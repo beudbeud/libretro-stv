@@ -79,14 +79,14 @@ CXXFLAGS := \
     -std=c++11 -O3 \
     -fsigned-char -fwrapv -fexceptions \
     -fno-fast-math -fno-unsafe-math-optimizations \
-    -fno-printf-return-value -fstrict-aliasing \
+    -fstrict-aliasing \
     -fPIC -fvisibility=hidden \
     $(DEFINES) $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
 # GCC-only flags; clang (NDK) doesn't know them.
 ifeq ($(platform),unix)
-   CXXFLAGS += -fno-aggressive-loop-optimizations -fno-ipa-icf
+   CXXFLAGS += -fno-printf-return-value -fno-aggressive-loop-optimizations -fno-ipa-icf
 endif
 
 CFLAGS := \
