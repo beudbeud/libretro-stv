@@ -1,6 +1,8 @@
-# Makefile.libretro — build mednafen_stv_libretro.so
+# Makefile.libretro — build mednafen_stv_libretro.so / .dll
 # Usage:
 #   Linux:          make -f libretro/Makefile.libretro [TARGET_CROSS=aarch64-buildroot-linux-gnu-]
+#   Windows x64:    make -f libretro/Makefile.libretro platform=win64 [TARGET_CROSS=x86_64-w64-mingw32-]
+#   Windows x86:    make -f libretro/Makefile.libretro platform=win32 [TARGET_CROSS=i686-w64-mingw32-]
 #   Android arm64:  make -f libretro/Makefile.libretro platform=android-arm64  ANDROID_NDK_ROOT=/path/to/ndk
 #   Android armv7:  make -f libretro/Makefile.libretro platform=android-armv7  ANDROID_NDK_ROOT=/path/to/ndk
 #   Android x86_64: make -f libretro/Makefile.libretro platform=android-x86_64 ANDROID_NDK_ROOT=/path/to/ndk
@@ -14,12 +16,25 @@ platform ?= unix
 BUILD_DIR   := $(CORE_DIR)/build_libretro/$(platform)
 
 USE_BUNDLED_ZSTD :=
+IS_WINDOWS       :=
 
 ifeq ($(platform),unix)
    CC  := $(TARGET_CROSS)gcc
    CXX := $(TARGET_CROSS)g++
    AR  := $(TARGET_CROSS)ar
    PLATFORM_LIBS := -lz -lpthread -lzstd
+else ifneq (,$(filter $(platform),win64 win32))
+   ifeq ($(platform),win64)
+      TARGET_CROSS ?= x86_64-w64-mingw32-
+   else
+      TARGET_CROSS ?= i686-w64-mingw32-
+   endif
+   CC  := $(TARGET_CROSS)gcc
+   CXX := $(TARGET_CROSS)g++
+   AR  := $(TARGET_CROSS)ar
+   PLATFORM_LIBS    := -lz -lws2_32
+   USE_BUNDLED_ZSTD := 1
+   IS_WINDOWS       := 1
 else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
    ANDROID_NDK_ROOT ?= $(NDK_ROOT)
    ifeq ($(ANDROID_NDK_ROOT),)
@@ -86,7 +101,7 @@ CXXFLAGS := \
     -include $(BUILD_DIR)/config.h
 
 # GCC-only flags; clang (NDK) doesn't know them.
-ifeq ($(platform),unix)
+ifneq (,$(filter $(platform),unix win64 win32))
    CXXFLAGS += -fno-printf-return-value -fno-aggressive-loop-optimizations -fno-ipa-icf
 endif
 
@@ -98,10 +113,16 @@ CFLAGS := \
     $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
+ifeq ($(IS_WINDOWS),1)
+TARGET  := $(CORE_DIR)/$(TARGET_NAME)_libretro.dll
+LDFLAGS := -shared -static-libgcc -static-libstdc++ $(PLATFORM_LIBS)
+else
+TARGET  := $(CORE_DIR)/$(TARGET_NAME)_libretro.so
 LDFLAGS := -shared \
     -Wl,-soname,$(TARGET_NAME)_libretro.so \
     -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
     $(PLATFORM_LIBS)
+endif
 
 CORE_SRCS :=
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/*.cpp)
@@ -139,11 +160,21 @@ CORE_SRCS := $(filter-out \
     $(CORE_DIR)/mednafen/cdrom/CDAFReader_Vorbis.cpp \
     $(CORE_DIR)/mednafen/cdrom/CDAFReader_FLAC.cpp, $(CORE_SRCS))
 
-# POSIX-specific sources not picked up by the globs above
-CORE_SRCS += \
-    $(CORE_DIR)/mednafen/net/Net.cpp \
-    $(CORE_DIR)/mednafen/net/Net_POSIX.cpp \
-    $(CORE_DIR)/mednafen/mthreading/MThreading_POSIX.cpp
+# Platform-specific sources (net, threading, time)
+ifeq ($(IS_WINDOWS),1)
+   CORE_SRCS := $(filter-out %Time_POSIX.cpp, $(CORE_SRCS))
+   CORE_SRCS += \
+       $(CORE_DIR)/mednafen/net/Net.cpp \
+       $(CORE_DIR)/mednafen/net/Net_WS2.cpp \
+       $(CORE_DIR)/mednafen/mthreading/MThreading_Win32.cpp \
+       $(CORE_DIR)/mednafen/time/Time_Win32.cpp \
+       $(CORE_DIR)/mednafen/win32-common.cpp
+else
+   CORE_SRCS += \
+       $(CORE_DIR)/mednafen/net/Net.cpp \
+       $(CORE_DIR)/mednafen/net/Net_POSIX.cpp \
+       $(CORE_DIR)/mednafen/mthreading/MThreading_POSIX.cpp
+endif
 
 LIBRETRO_SRCS := $(CORE_DIR)/libretro/libretro.cpp
 ALL_CXX_SRCS  := $(LIBRETRO_SRCS) $(CORE_SRCS)
@@ -171,8 +202,6 @@ endif
 
 OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_CXX_SRCS)) \
         $(patsubst $(CORE_DIR)/%.c,$(BUILD_DIR)/%.o,$(CORE_C_SRCS))
-
-TARGET := $(CORE_DIR)/$(TARGET_NAME)_libretro.so
 
 .PHONY: all clean
 
