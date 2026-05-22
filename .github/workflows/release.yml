@@ -39,41 +39,6 @@ jobs:
           name: mednafen_stv_libretro_linux_${{ matrix.arch }}
           path: mednafen_stv_libretro_linux_${{ matrix.arch }}.so
 
-  build-windows:
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            platform: win64
-            cross: x86_64-w64-mingw32-
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MinGW
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-x86-64-dev
-
-      - name: Build
-        run: |
-          make -f libretro/Makefile.libretro \
-               platform=${{ matrix.platform }} \
-               TARGET_CROSS=${{ matrix.cross }} \
-               -j$(nproc)
-
-      - name: Rename artifact
-        run: |
-          mv mednafen_stv_libretro.dll \
-             mednafen_stv_libretro_windows_${{ matrix.arch }}.dll
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mednafen_stv_libretro_windows_${{ matrix.arch }}
-          path: mednafen_stv_libretro_windows_${{ matrix.arch }}.dll
-
   build-android:
     strategy:
       matrix:
@@ -103,7 +68,7 @@ jobs:
           path: mednafen_stv_libretro_android_${{ matrix.abi }}.so
 
   upload:
-    needs: [build, build-windows, build-android]
+    needs: [build, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -116,6 +81,4 @@ jobs:
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            mednafen_stv_libretro_*.so
-            mednafen_stv_libretro_*.dll
+          files: mednafen_stv_libretro_*.so
