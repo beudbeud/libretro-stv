@@ -73,10 +73,7 @@ static bool        g_stv_skip_bios    = false;
 static bool        g_bios_state_saved = false;
 static std::string g_bios_state_path;
 /* Game-start detection: SMPC INTBACK (command 0x10) is how game code polls
- * controllers.  The STV BIOS never issues INTBACK — only game code does.
- * We save the state after 90 consecutive frames of INTBACK + PC outside BIOS ROM. */
-static bool        g_was_in_bios_rom        = false;
-static int         g_game_geom_consecutive  = 0;
+ * controllers.  The STV BIOS never issues INTBACK — only game code does. */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -540,8 +537,6 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
 
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
     g_bios_state_saved      = false;
-    g_was_in_bios_rom       = false;
-    g_game_geom_consecutive = 0;
     g_bios_state_path.clear();
     if(g_stv_skip_bios) {
         char md5_hex[33] = {};
@@ -701,8 +696,6 @@ RETRO_API void retro_unload_game(void)
     s_serialize_size = 0;
     g_frameskip_counter = 0;
     g_bios_state_saved      = false;
-    g_was_in_bios_rom       = false;
-    g_game_geom_consecutive = 0;
     g_bios_state_path.clear();
 }
 
@@ -779,16 +772,9 @@ RETRO_API void retro_run(void)
         const uint32_t pc = MDFN_IEN_SS::SS_GetMasterPC();
         const bool in_bios_rom = (pc < 0x00200000u);
 
-        g_was_in_bios_rom = in_bios_rom;
-
-        /* Detect game start via SMPC INTBACK (command 0x10 — controller poll).
-         * The STV BIOS never calls INTBACK; game code does every frame.
-         * Require 90 consecutive frames (~1.5 s) of INTBACK + outside BIOS ROM. */
-        const bool game_active = (MDFN_IEN_SS::SS_GetINTBACKCount() > 0 && !in_bios_rom);
-        if(game_active) ++g_game_geom_consecutive;
-        else            g_game_geom_consecutive = 0;
-
-        const bool game_running = (g_game_geom_consecutive >= 90);
+        /* Fire as soon as SMPC INTBACK has been called and PC is outside BIOS ROM.
+         * The STV BIOS never calls INTBACK; game code does every frame. */
+        const bool game_running = (MDFN_IEN_SS::SS_GetINTBACKCount() > 0 && !in_bios_rom);
 
         if(game_running) {
             try {
