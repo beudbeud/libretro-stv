@@ -109,18 +109,15 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
  if(ECChip == STV_EC_CHIP_315_5838)
  {
   /* 315-5838 (Decathlete) — MAME decathlt_prot_srcaddr_w:
-   * Bank is set from the WRITE address bits [24:23] on every write to
-   * the cart range, independent of whether the offset targets a chip
-   * register.  Register dispatch is at 4-byte aligned offsets 0x7FFFF0
-   * (srcaddr) and 0x7FFFF4 (data_w); SH-2 32-bit writes are split by
-   * the bus into two 16-bit writes so the HI/LO halves land at
-   *   0x7FFFF0 (hi) / 0x7FFFF2 (lo) → srcaddr combine
-   *   0x7FFFF4 (hi) → mode_w,  0x7FFFF6 (lo) → data_w                 */
+   * Write address bits [24:23] select a ROM bank (0x800000-byte window):
+   *   bank 0 (0x2000000-0x27FFFFF) → cart byte 0x000000
+   *   bank 1 (0x2800000-0x2FFFFFFF) → cart byte 0x800000
+   *   bank 2 (0x3000000-0x37FFFFF) → cart byte 0x1000000
+   * srcoffset is a word offset within the selected bank window.
+   * Register dispatch: 0x7FFFF0/2 → srcaddr hi/lo, 0x7FFFF4/6 → mode/data */
   if(sizeof(T) == 2)
   {
    const uint32 off  = (A - 0x02000000) & 0x7FFFFF;
-   const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
-   chip5838.set_bank(bank);
 
    if(MDFN_UNLIKELY(off == 0x7FFFF0))
    {
@@ -131,6 +128,16 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
    {
     uint32 full = (chip5838.pending_srcaddr_hi | *DB) & 0x007FFFFF;
     chip5838.pending_srcaddr_hi = 0;
+    /* Bank select from write address — matches MAME decathlt_prot_srcaddr_w:
+     *   (offs & 0x1800000) >> 23 where offs = CPU_addr - 0x2000000 (byte offset)
+     * Bank 0: 0x2000000-0x27FFFFF → cart byte 0x000000
+     * Bank 1: 0x2800000-0x2FFFFFFF → cart byte 0x800000
+     * Bank 2: 0x3000000-0x37FFFFF → cart byte 0x1000000 */
+    {
+     static const uint32_t bank_word_offsets[3] = {0, 0x400000, 0x800000};
+     const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
+     chip5838.rom = chip5838.rom_phys + (bank < 3 ? bank_word_offsets[bank] : 0);
+    }
     chip5838.srcaddr_w16(full);
     return;
    }
@@ -474,10 +481,12 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
   if(ECChip == STV_EC_CHIP_315_5838)
   {
    chip5838.reset();
-   chip5838.rom            = ROM;                        /* bank 0 default */
+   /* rom_phys = cart byte 0 (matches MAME protbank bank-0 base = cart + 0x000000).
+    * Bank is selected at srcaddr write time from the SH-2 address bits [24:23]. */
+   chip5838.rom            = ROM;
    chip5838.rom_base       = ROM;
-   chip5838.rom_phys       = ROM;                        /* bank N = ROM + N*0x400000 words */
-   chip5838.rom_size_words = 0x3000000 / sizeof(uint16); /* full ROM array */
+   chip5838.rom_phys       = ROM;
+   chip5838.rom_size_words = 0x1800000 / sizeof(uint16); /* full 24MB cart */
    chip5838.pending_srcaddr_hi = 0;
    MDFN_printf(_("[CART-STV] 315-5838 decipher chip enabled (Decathlete)\n"));
   }

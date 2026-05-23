@@ -18,14 +18,12 @@ The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, includ
 | Touryuu Densetsu Elan Doree | Working |
 
 ### 315-5838 decompression + encryption chip
-| Game |
-|------|
-| Decathlete (V1.000) |
-| Decathlete (V1.001) |
+| Game | Status |
+|------|--------|
+| Decathlete (V1.000) | Working |
+| Decathlete (V1.001) | Working |
 
-The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank layout and byte-swap compensation match MAME.
-
-> **Status**: Implementation complete — pending in-game visual verification.
+The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank selection matches MAME's `decathlt_prot_srcaddr_w` (SH-2 address bits [24:23] → 8 MB bank window).
 
 ### Batman Forever
 

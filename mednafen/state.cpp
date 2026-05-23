@@ -376,7 +376,7 @@ bool MDFNSS_StateAction(StateMem *sm, const unsigned load, const bool data_only,
     st->read(sname_canary, 32 + 8);
 
     if(strncmp(sname_canary, sname, 32))
-     throw MDFN_Error(0, _("Section name mismatch in state loading fast path."));
+     throw MDFN_Error(0, _("Section name mismatch in state loading fast path: expected=\"%.32s\" got=\"%.32s\"."), sname, sname_canary);
 
     if(memcmp(sname_canary + 32, SSFastCanary, 8))
      throw MDFN_Error(0, _("Section canary is a zombie AAAAAAAAAAGH!"));
