@@ -127,11 +127,10 @@ CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_video/*.cpp)
 CORE_SRCS := $(filter-out $(CORE_DIR)/mednafen/drivers/%, $(CORE_SRCS))
 # Windows-only sources
 CORE_SRCS := $(filter-out %win32-common.cpp %_Win32.cpp %_win32.cpp, $(CORE_SRCS))
-# Test / record-only sources
+# Test-only sources (qtrecord.cpp is kept: referenced by mednafen.cpp, zlib already linked)
 CORE_SRCS := $(filter-out \
     $(CORE_DIR)/mednafen/tests.cpp \
     $(CORE_DIR)/mednafen/testsexp.cpp \
-    $(CORE_DIR)/mednafen/qtrecord.cpp \
     $(CORE_DIR)/mednafen/sound/okiadpcm_generate.cpp, $(CORE_SRCS))
 # CD audio decoders needing optional libs (mpc/vorbis/flac) — use stubs instead
 CORE_SRCS := $(filter-out \

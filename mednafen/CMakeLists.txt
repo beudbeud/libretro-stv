@@ -34,7 +34,6 @@ endforeach()
 # Source-specific exclusions
 list(FILTER MDFN_CORE_SRCS  EXCLUDE REGEX ".*/tests\\.cpp$")
 list(FILTER MDFN_CORE_SRCS  EXCLUDE REGEX ".*/testsexp\\.cpp$")
-list(FILTER MDFN_CORE_SRCS  EXCLUDE REGEX ".*/qtrecord\\.cpp$")
 list(FILTER MDFN_SOUND_SRCS EXCLUDE REGEX ".*/okiadpcm_generate\\.cpp$")
 
 # CD audio decoders that need optional libs not available on embedded targets
