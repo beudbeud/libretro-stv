@@ -72,15 +72,11 @@ static std::string sys_dir, save_dir;
 static bool        g_stv_skip_bios    = false;
 static bool        g_bios_state_saved = false;
 static std::string g_bios_state_path;
-/* Game-start detection: count transitions INTO BIOS ROM (PC < 0x00200000).
- * Two paths trigger a state save:
- *   - 2+ BIOS ROM entries seen, then 60+ frames pass  (games that revisit ROM)
- *   - PC jumps > 0x30000 bytes from its initial Work RAM address  (single-visit) */
-static int         g_bios_total_frames   = 0;
-static int         g_last_bios_rom_frame = 0;
-static int         g_bios_rom_visits     = 0;
-static bool        g_was_in_bios_rom     = false;
-static uint32_t    g_bios_wram_base_pc   = 0;
+/* Game-start detection: SMPC INTBACK (command 0x10) is how game code polls
+ * controllers.  The STV BIOS never issues INTBACK — only game code does.
+ * We save the state after 90 consecutive frames of INTBACK + PC outside BIOS ROM. */
+static bool        g_was_in_bios_rom        = false;
+static int         g_game_geom_consecutive  = 0;
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -543,12 +539,9 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     apply_options();
 
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
-    g_bios_state_saved    = false;
-    g_bios_total_frames   = 0;
-    g_last_bios_rom_frame = 0;
-    g_bios_rom_visits     = 0;
-    g_was_in_bios_rom     = false;
-    g_bios_wram_base_pc   = 0;
+    g_bios_state_saved      = false;
+    g_was_in_bios_rom       = false;
+    g_game_geom_consecutive = 0;
     g_bios_state_path.clear();
     if(g_stv_skip_bios) {
         char md5_hex[33] = {};
@@ -707,12 +700,9 @@ RETRO_API void retro_unload_game(void)
     port_ptr[0] = port_ptr[1] = nullptr;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
-    g_bios_state_saved    = false;
-    g_bios_total_frames   = 0;
-    g_last_bios_rom_frame = 0;
-    g_bios_rom_visits     = 0;
-    g_was_in_bios_rom     = false;
-    g_bios_wram_base_pc   = 0;
+    g_bios_state_saved      = false;
+    g_was_in_bios_rom       = false;
+    g_game_geom_consecutive = 0;
     g_bios_state_path.clear();
 }
 
@@ -786,27 +776,19 @@ RETRO_API void retro_run(void)
     MDFNI_Emulate(&espec);
 
     if(g_stv_skip_bios && !g_bios_state_saved && !g_bios_state_path.empty()) {
-        ++g_bios_total_frames;
         const uint32_t pc = MDFN_IEN_SS::SS_GetMasterPC();
         const bool in_bios_rom = (pc < 0x00200000u);
 
-        if(in_bios_rom && !g_was_in_bios_rom) {
-            ++g_bios_rom_visits;
-            g_last_bios_rom_frame = g_bios_total_frames;
-            g_bios_wram_base_pc   = 0;
-        }
         g_was_in_bios_rom = in_bios_rom;
 
-        if(g_bios_rom_visits >= 1 && !in_bios_rom && g_bios_wram_base_pc == 0)
-            g_bios_wram_base_pc = pc;
+        /* Detect game start via SMPC INTBACK (command 0x10 — controller poll).
+         * The STV BIOS never calls INTBACK; game code does every frame.
+         * Require 90 consecutive frames (~1.5 s) of INTBACK + outside BIOS ROM. */
+        const bool game_active = (MDFN_IEN_SS::SS_GetINTBACKCount() > 0 && !in_bios_rom);
+        if(game_active) ++g_game_geom_consecutive;
+        else            g_game_geom_consecutive = 0;
 
-        const int gap = g_bios_total_frames - g_last_bios_rom_frame;
-        bool game_running = (g_bios_rom_visits >= 2 && gap >= 60);
-        if(!game_running && g_bios_wram_base_pc != 0 && !in_bios_rom) {
-            const uint32_t diff = (pc >= g_bios_wram_base_pc)
-                ? (pc - g_bios_wram_base_pc) : (g_bios_wram_base_pc - pc);
-            game_running = (diff >= 0x30000);
-        }
+        const bool game_running = (g_game_geom_consecutive >= 90);
 
         if(game_running) {
             try {

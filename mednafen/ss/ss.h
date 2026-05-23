@@ -126,6 +126,7 @@ namespace MDFN_IEN_SS
  void SS_RequestEHLExit(void);
  void ForceEventUpdates(const sscpu_timestamp_t timestamp);
  uint32 SS_GetMasterPC(void);
+ uint32 SS_GetINTBACKCount(void);  /* SMPC INTBACK calls; 0 during BIOS phase on STV */
 
  enum
  {

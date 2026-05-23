@@ -781,6 +781,11 @@ uint32 SS_GetMasterPC(void)
  return CPU[0].PC;
 }
 
+uint32 SS_GetINTBACKCount(void)
+{
+ return SMPC_GetINTBACKCount();
+}
+
 void SS_Reset(bool powering_up)
 {
  SH7095_BusLock = 0;

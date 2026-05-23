@@ -146,6 +146,7 @@ static int32 ResetButtonCount;
 static bool ResetPending;
 static int32 PendingCommand;
 static int32 ExecutingCommand;
+static uint32 INTBACKCount;  /* incremented on each INTBACK execution; BIOS never calls it on STV */
 static int32 PendingClockDivisor;
 static int32 CurrentClockDivisor;
 
@@ -500,6 +501,7 @@ void SMPC_Reset(bool powering_up)
  ExecutingCommand = -1;
  SR = 0x00;
  SF = 0;
+ INTBACKCount = 0;
 
  BusBuffer = 0x00;
 
@@ -1224,6 +1226,7 @@ sscpu_timestamp_t SMPC_Update(sscpu_timestamp_t timestamp)
     else if(ExecutingCommand == CMD_INTBACK)
     {
      //SS_DBGTI(SS_DBG_SMPC, "[SMPC] INTBACK IREG0=0x%02x, IREG1=0x%02x, IREG2=0x%02x, %d", IREG[0], IREG[1], IREG[2], vb);
+     INTBACKCount++;
 
      SR &= ~SR_NPE;
      if(IREG[0] & 0xF)
@@ -1758,5 +1761,9 @@ const std::vector<InputPortInfoStruct> SMPC_PortInfo =
  { "builtin", "Builtin", InputDeviceInfoBuiltin, "builtin" },
 };
 
+uint32 SMPC_GetINTBACKCount(void)
+{
+ return INTBACKCount;
+}
 
 }
