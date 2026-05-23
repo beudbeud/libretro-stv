@@ -34,7 +34,9 @@
 /* Define to enable debug trace — redirect to stderr.
  * Dumps: decipher self-test, srcaddr writes, first 32 source words,
  * first 32 decipher outputs, and first 64 decompressed bytes.        */
+/* Enable light debug: only srcaddr writes (no source words, no decoded bytes, no dict/tree spam) */
 //#define CHIP5838_DEBUG 1
+//#define CHIP5838_DEBUG_LIGHT 1
 
 namespace MDFN_IEN_SS
 {
@@ -156,38 +158,31 @@ struct Chip5838
   return p;
  }
 
- /* ── ROM word reader (XOR-2 addressing, auto-increment srcoffset) ────── */
+ /* ── ROM word reader (auto-increment srcoffset) ────────────────────── */
  uint16_t source_word_r()
  {
-  const uint32_t byte_addr = (srcoffset * 2) ^ 2;
+  const uint32_t byte_addr = srcoffset * 2;
   uint16_t word = 0xFFFF;
 
   if(byte_addr + 1 < rom_size_words * 2)
    word = *(const uint16_t*)((const uint8_t*)rom + byte_addr);
 
-  /* MAME's device_rom_interface defaults to ENDIANNESS_LITTLE, so its
-   * read_word() is also a LE read.  However MAME's cart is ROM_REGION32_BE:
-   *   ROM_LOAD16_WORD_SWAP stores (MSB, LSB) → LE read = (LSB<<8)|MSB
-   *   ROM_RELOAD_PLAIN    stores (f0,  f1 ) → LE read = (f1<<8)|f0
-   * libretro stores the same data with opposite byte layout in the ROM array
-   * (STV_MAP_16LE for WORD_SWAP, STV_MAP_16BE for RELOAD_PLAIN), so both
-   * raw LE reads come out byte-swapped vs MAME.  Swap here to compensate. */
-#ifdef CHIP5838_DEBUG
-  const uint16_t raw = word;
-#endif
-  word = (uint16_t)((word >> 8) | (word << 8));
-
+  /* MAME uses XOR-2 addressing on a ROM_REGION32_BE + ROM_LOAD16_WORD_SWAP
+   * region accessed via an LE device.  The XOR-2 and the WORD_SWAP cancel:
+   * the net result is sequential 16-bit LE reads of the original file bytes.
+   * libretro STV_MAP_16LE (used for ROM_LOAD16_WORD_SWAP) stores the file
+   * bytes as-is on LE hosts, so a plain sequential LE read is all we need. */
   srcoffset = (srcoffset + 1) & 0x007FFFFF;
   if(srcoffset == srcstart)
    abort = true;
 
-#ifdef CHIP5838_DEBUG
+#if defined(CHIP5838_DEBUG) && !defined(CHIP5838_DEBUG_LIGHT)
   if(dbg_src_count < 32)
   {
    const uint32_t abs_byte = (uint32_t)(((const uint8_t*)rom - (const uint8_t*)rom_phys) + byte_addr);
-   fprintf(stderr, "[5838] src[%2d] bank=%d srcoff=0x%06X byte_addr=0x%06X raw=0x%04X bswap=0x%04X\n",
-    dbg_src_count, active_bank, (unsigned)(srcoffset ? srcoffset-1 : 0x7FFFFF),
-    (unsigned)byte_addr, (unsigned)raw, (unsigned)word);
+   fprintf(stderr, "[5838] src[%2d] srcoff=0x%06X abs_byte=0x%06X word=0x%04X\n",
+    dbg_src_count, (unsigned)(srcoffset ? srcoffset-1 : 0x7FFFFF),
+    abs_byte, (unsigned)word);
    dbg_src_count++;
    if(dbg_src_count == 32)
     fprintf(stderr, "[5838] (source_word_r trace complete)\n");
@@ -210,7 +205,7 @@ struct Chip5838
     uint16_t raw_src = source_word_r();
     val_compressed      = decipher(raw_src);
     num_bits_compressed = 16;
-#ifdef CHIP5838_DEBUG
+#if defined(CHIP5838_DEBUG) && !defined(CHIP5838_DEBUG_LIGHT)
     if(dbg_dec_count < 32)
     {
      fprintf(stderr, "[5838] dec[%2d] raw=0x%04X decipher=0x%04X\n",
@@ -239,7 +234,7 @@ struct Chip5838
     val      = 0;
     num_bits = 0;
 
-#ifdef CHIP5838_DEBUG
+#if defined(CHIP5838_DEBUG) && !defined(CHIP5838_DEBUG_LIGHT)
     if(dbg_byte_count < 64)
     {
      fprintf(stderr, "[5838] byte[%2d] dict[%d]=0x%02X\n",
@@ -297,12 +292,10 @@ struct Chip5838
    fprintf(stderr, "[5838] SELFTEST: decipher(0x1533)=0x%04X  expected=0x16BE  %s\n",
     (unsigned)tv, tv == 0x16BE ? "PASS" : "FAIL !!!");
   }
-  fprintf(stderr, "[5838] srcaddr_w16: bank=%d srcoffset=0x%06X\n",
-   active_bank, (unsigned)srcoffset);
-  /* Dump full tree state so we can verify against MAME */
-  for(int _i = 0; _i < 12; _i++)
-   fprintf(stderr, "[5838]   tree[%2d] len=%2u idx=%3u pattern=0x%04X\n",
-    _i, cs.tree[_i].len, cs.tree[_i].idx, cs.tree[_i].pattern);
+  static int srcaddr_count = 0;
+  srcaddr_count++;
+  fprintf(stderr, "[5838] srcaddr_w16 #%d: srcoffset=0x%06X\n",
+   srcaddr_count, (unsigned)srcoffset);
 #endif
  }
 
@@ -316,10 +309,6 @@ struct Chip5838
    cs.it2 = 0;
   else
    cs.id = 0;
-#ifdef CHIP5838_DEBUG
-  fprintf(stderr, "[5838] upload_mode: 0x%04X → %s (reset index)\n",
-   v, (v & 0x80) ? "DICT" : "TREE");
-#endif
  }
 
  /* Upload one 16-bit value into tree or dictionary */
@@ -334,17 +323,10 @@ struct Chip5838
    {
     cs.tree[cs.it2/2].len     = (v & 0xFF00) >> 8;
     cs.tree[cs.it2/2].idx     = (v & 0x00FF);
-#ifdef CHIP5838_DEBUG
-    fprintf(stderr, "[5838] tree[%2d] len=0x%02X idx=0x%02X\n",
-     cs.it2/2, cs.tree[cs.it2/2].len, cs.tree[cs.it2/2].idx);
-#endif
    }
    else
    {
     cs.tree[cs.it2/2].pattern = v;
-#ifdef CHIP5838_DEBUG
-    fprintf(stderr, "[5838] tree[%2d] pattern=0x%04X\n", cs.it2/2, v);
-#endif
    }
    cs.it2++;
   }
@@ -353,13 +335,6 @@ struct Chip5838
    /* Dictionary upload: two bytes per 16-bit write.
     * Guard: id must be ≤ 254 so both bytes (id, id+1) fit in [0..255]. */
    if(cs.id >= 255) return;
-#ifdef CHIP5838_DEBUG
-   if(cs.id < 32 || cs.id >= 250)
-    fprintf(stderr, "[5838] dict[%3d]=0x%02X dict[%3d]=0x%02X\n",
-     cs.id, (v>>8)&0xFF, cs.id+1, v&0xFF);
-   else if(cs.id == 32)
-    fprintf(stderr, "[5838] dict[...] (skipping middle entries)\n");
-#endif
    cs.dictionary[cs.id++] = (v & 0xFF00) >> 8;
    cs.dictionary[cs.id++] = (v & 0x00FF);
   }

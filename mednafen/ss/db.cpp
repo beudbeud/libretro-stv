@@ -438,7 +438,7 @@ static const STVGameInfo STVGI[] =
   false,
   {
    { 0x0000001, 0x0100000, STV_MAP_BYTE, "epr18967.13" },
-   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967.13" },  /* MAME ROM_RELOAD_PLAIN: 315-5838 reads code area as plain bytes */
+   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967.13" },  /* MAME ROM_RELOAD_PLAIN */
    { 0x0300000, 0x0100000, STV_MAP_16BE, "epr18967.13" },  /* MAME ROM_RELOAD_PLAIN */
 
    { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr18968.2" },
@@ -460,7 +460,7 @@ static const STVGameInfo STVGI[] =
   false,
   {
    { 0x0000001, 0x0100000, STV_MAP_BYTE, "epr18967a.13" },
-   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967a.13" },  /* MAME ROM_RELOAD_PLAIN: 315-5838 reads code area as plain bytes */
+   { 0x0200000, 0x0100000, STV_MAP_16BE, "epr18967a.13" },  /* MAME ROM_RELOAD_PLAIN */
    { 0x0300000, 0x0100000, STV_MAP_16BE, "epr18967a.13" },  /* MAME ROM_RELOAD_PLAIN */
 
    { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr18968.2" },
@@ -1621,8 +1621,10 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   * partially-drawn sprites cannot leak into the displayed buffer. */
  static const char* const vdp1_instant_draw[] =
  {
-  "Astra SuperStars",    /* rolling write spans ~5 frames; VDP1INSTANT gives consistent 1-frame-old positions */
-  "Virtua Fighter Kids", /* same rolling write (~525/540 cmds/frame); LATESWAP snapshot has mixed-age positions */
+  "Astra SuperStars",         /* rolling write spans ~5 frames; VDP1INSTANT gives consistent 1-frame-old positions */
+  "Decathlete (V1.000)",      /* 315-5838 decompressor: dense VRAM writes exhaust VDP1 timing; mid-frame swap leaves FB empty */
+  "Decathlete (V1.001)",      /* same as V1.000 */
+  "Virtua Fighter Kids",      /* same rolling write (~525/540 cmds/frame); LATESWAP snapshot has mixed-age positions */
  };
 
  static const char* const vdp1_late_draw[] =
@@ -1636,7 +1638,9 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
   * hack so that VDP1 rendering stays in sync with the real hardware cadence. */
  static const char* const no_vdp1_slowdown[] =
  {
-  "Astra SuperStars",  /* 315-5881: dense VRAM writes from ROM texture transfers exhaust VDP1 CycleCounter */
+  "Astra SuperStars",       /* 315-5881: dense VRAM writes from ROM texture transfers exhaust VDP1 CycleCounter */
+  "Decathlete (V1.000)",    /* 315-5838: same issue — ROM decompression VRAM writes exhaust CycleCounter */
+  "Decathlete (V1.001)",    /* same as V1.000 */
   "Baku Baku Animal",
   "Columns '97",
   "Critter Crusher",
