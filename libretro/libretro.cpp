@@ -65,6 +65,7 @@ static int16_t audio_buf[AUDIO_MAX * 2];
 
 static uint8_t pad_data[2][32] = {};
 static uint8_t *port_ptr[2]    = {};
+static unsigned g_port_device[2] = { RETRO_DEVICE_JOYPAD, RETRO_DEVICE_JOYPAD };
 
 static std::string sys_dir, save_dir;
 
@@ -205,23 +206,85 @@ static void update_input()
     if(!input_poll_cb || !input_state_cb) return;
     input_poll_cb();
 
-    /* ── Player gamepad inputs ── */
+    /* ── Player inputs — dispatched by device type ── */
     for(int p = 0; p < 2; p++) {
         if(!port_ptr[p]) continue;
 
-        uint16_t bits = 0;
-        for(auto &m : s_pad_map)
-            if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
-                bits |= (1u << m.bit);
+        if(g_port_device[p] == RETRO_DEVICE_MOUSE) {
+            /* Saturn Mouse data layout (5 bytes):
+             *   [0..1] int16 LE x-delta   (signed, positive = right)
+             *   [2..3] int16 LE y-delta   (signed, positive = down)
+             *   [4]    buttons nibble: bit0=left, bit1=middle, bit2=right, bit3=start
+             * mouse.cpp UpdateInput accumulates deltas and resets them on read. */
+            int16_t dx = (int16_t)input_state_cb(p, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X);
+            int16_t dy = (int16_t)input_state_cb(p, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
+            port_ptr[p][0] = (uint8_t)((uint16_t)dx & 0xFF);
+            port_ptr[p][1] = (uint8_t)((uint16_t)dx >> 8);
+            port_ptr[p][2] = (uint8_t)((uint16_t)dy & 0xFF);
+            port_ptr[p][3] = (uint8_t)((uint16_t)dy >> 8);
+            uint8_t mb = 0;
+            if(input_state_cb(p, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT))   mb |= 0x1;
+            if(input_state_cb(p, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE)) mb |= 0x2;
+            if(input_state_cb(p, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT))  mb |= 0x4;
+            if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START)) mb |= 0x8;
+            port_ptr[p][4] = mb;
 
-        /* No simultaneous opposite directions */
-        if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
-            bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
-        if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
-            bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+        } else if(g_port_device[p] == RETRO_DEVICE_LIGHTGUN) {
+            /* Saturn Lightgun (Virtua Gun) data layout (5 bytes):
+             *   [0..1] int16 LE X in display-pixel coords  (0..nominal_width-1)
+             *   [2..3] int16 LE Y in scanline coords       (0..nominal_height-1)
+             *   [4]    buttons: bit0=trigger, bit1=start, bit2=offscreen_shot
+             * gun.cpp TransformInput scales X from pixel coords to 21kHz clock space.
+             * LineHook compares Y directly to scanline numbers. */
+            bool offscreen = (bool)input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0,
+                                                   RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN);
+            bool reload    = (bool)input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0,
+                                                   RETRO_DEVICE_ID_LIGHTGUN_RELOAD);
+            int16_t gx, gy;
+            if(offscreen || reload) {
+                /* Coords far off-screen; gun.cpp treats any coord outside
+                 * [0,21472) as offscreen — no light pulse triggered. */
+                gx = -16384;
+                gy = -16384;
+            } else {
+                int sx = input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0,
+                                        RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X);
+                int sy = input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0,
+                                        RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y);
+                int nom_w = game_info ? game_info->nominal_width  : 320;
+                int nom_h = game_info ? game_info->nominal_height : 240;
+                /* Map RA range [-0x7FFF, 0x7FFF] → [0, nominal_dimension) */
+                gx = (int16_t)(((sx + 0x7FFF) * nom_w) / (2 * 0x7FFF));
+                gy = (int16_t)(((sy + 0x7FFF) * nom_h) / (2 * 0x7FFF));
+                gx = std::max<int16_t>(0, std::min<int16_t>((int16_t)(nom_w - 1), gx));
+                gy = std::max<int16_t>(0, std::min<int16_t>((int16_t)(nom_h - 1), gy));
+            }
+            port_ptr[p][0] = (uint8_t)((uint16_t)gx & 0xFF);
+            port_ptr[p][1] = (uint8_t)((uint16_t)gx >> 8);
+            port_ptr[p][2] = (uint8_t)((uint16_t)gy & 0xFF);
+            port_ptr[p][3] = (uint8_t)((uint16_t)gy >> 8);
+            uint8_t gb = 0;
+            if(input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_TRIGGER)) gb |= 0x1;
+            if(input_state_cb(p, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_START))   gb |= 0x2;
+            if(offscreen || reload)                                                             gb |= 0x4;
+            port_ptr[p][4] = gb;
 
-        port_ptr[p][0] = (uint8_t)(bits & 0xFF);
-        port_ptr[p][1] = (uint8_t)(bits >> 8);
+        } else {
+            /* Standard digital gamepad */
+            uint16_t bits = 0;
+            for(auto &m : s_pad_map)
+                if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
+                    bits |= (1u << m.bit);
+
+            /* No simultaneous opposite directions */
+            if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
+                bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
+            if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
+                bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+
+            port_ptr[p][0] = (uint8_t)(bits & 0xFF);
+            port_ptr[p][1] = (uint8_t)(bits >> 8);
+        }
     }
 
     /* ── ST-V Builtin port 12 (Test / Service / Pause / Coin) ──
@@ -414,6 +477,20 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)legacy);
     }
+
+    /* Announce supported controller types per port */
+    static const retro_controller_description port_devices[] = {
+        { "Saturn Gamepad",  RETRO_DEVICE_JOYPAD   },
+        { "Saturn Mouse",    RETRO_DEVICE_MOUSE     },
+        { "Saturn Lightgun", RETRO_DEVICE_LIGHTGUN  },
+        { nullptr, 0 },
+    };
+    static const retro_controller_info ctrl_info[] = {
+        { port_devices, 3 },  /* port 1 */
+        { port_devices, 3 },  /* port 2 */
+        { nullptr, 0 },
+    };
+    cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ctrl_info);
 }
 
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t cb)          { video_cb = cb; }
@@ -567,10 +644,11 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
             /* type 0 = first/default device for this port */
             MDFNI_SetInput(p, 0);
         }
-        /* Gamepad for players 0 and 1 (type 1 = gamepad) */
+        /* Gamepad for players 0 and 1 (type 1 = gamepad).
+         * MDFNI_SetInput allocates exactly InputByteSize bytes and zeroes them. */
         for(int p = 0; p < 2; p++) {
+            g_port_device[p] = RETRO_DEVICE_JOYPAD;
             port_ptr[p] = MDFNI_SetInput(p, 1);
-            if(port_ptr[p]) memset(port_ptr[p], 0, 2);
         }
         /* Port 12 = builtin (type 0) — holds STV Test/Service/Pause */
         int builtin_port = nports - 1;
@@ -585,7 +663,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     /* Input descriptors — shown in RetroArch's control remapping UI */
     {
         static const struct retro_input_descriptor desc[] = {
-            /* Player 1 */
+            /* Player 1 — Gamepad */
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
@@ -602,7 +680,15 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L3,    "Test Button"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Service Button"},
-            /* Player 2 */
+            /* Player 1 — Mouse */
+            {0,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_LEFT,    "Left Button"},
+            {0,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_RIGHT,   "Right Button"},
+            {0,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_MIDDLE,  "Middle Button"},
+            /* Player 1 — Lightgun */
+            {0,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_TRIGGER,"Trigger"},
+            {0,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_START,  "Start"},
+            {0,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_RELOAD, "Offscreen Reload"},
+            /* Player 2 — Gamepad */
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
@@ -618,6 +704,14 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R2,    "Right Shoulder (R)"},
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
             {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Pause Button"},
+            /* Player 2 — Mouse */
+            {1,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_LEFT,    "Left Button"},
+            {1,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_RIGHT,   "Right Button"},
+            {1,RETRO_DEVICE_MOUSE,0,RETRO_DEVICE_ID_MOUSE_MIDDLE,  "Middle Button"},
+            /* Player 2 — Lightgun */
+            {1,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_TRIGGER,"Trigger"},
+            {1,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_START,  "Start"},
+            {1,RETRO_DEVICE_LIGHTGUN,0,RETRO_DEVICE_ID_LIGHTGUN_RELOAD, "Offscreen Reload"},
             {0,0,0,0,nullptr},
         };
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
@@ -693,6 +787,7 @@ RETRO_API void retro_unload_game(void)
 {
     if(game_info) { MDFNI_CloseGame(); game_info = nullptr; }
     port_ptr[0] = port_ptr[1] = nullptr;
+    g_port_device[0] = g_port_device[1] = RETRO_DEVICE_JOYPAD;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
     g_bios_state_saved      = false;
@@ -944,6 +1039,18 @@ RETRO_API size_t retro_get_memory_size(unsigned id)
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
 {
     if(!initialized || port > 1) return;
-    port_ptr[port] = MDFNI_SetInput(port, (device==5) ? 2 : 1);
-    if(port_ptr[port]) memset(port_ptr[port], 0, 16);
+
+    /* Map libretro device type to mednafen SMPC device index:
+     *  0=none 1=gamepad 2=3dpad 3=mouse 4=wheel 5=mission
+     *  6=dmission 7=gun 8=keyboard 9=jpkeyboard */
+    int mdfn_idx;
+    switch(device) {
+    case RETRO_DEVICE_MOUSE:    mdfn_idx = 3; break;
+    case RETRO_DEVICE_LIGHTGUN: mdfn_idx = 7; break;
+    case RETRO_DEVICE_ANALOG:   mdfn_idx = 2; break;
+    default:                    mdfn_idx = 1; break;
+    }
+
+    g_port_device[port] = device;
+    port_ptr[port] = MDFNI_SetInput(port, mdfn_idx);
 }
