@@ -103,6 +103,11 @@ LDFLAGS := -shared \
     -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
     $(PLATFORM_LIBS)
 
+# Android: embed the C++ runtime statically so libc++_shared.so is not required
+ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
+   LDFLAGS += -static-libstdc++
+endif
+
 CORE_SRCS :=
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/*.cpp)
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/ss/*.cpp)
