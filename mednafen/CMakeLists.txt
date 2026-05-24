@@ -45,6 +45,7 @@ list(FILTER MDFN_CDROM_SRCS EXCLUDE REGEX ".*/CDAFReader_FLAC\\.cpp$")
 add_library(mdfn_core STATIC
     # C sources (not picked up by *.cpp globs)
     ${CMAKE_CURRENT_SOURCE_DIR}/minilzo/minilzo.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/quicklz/quicklz.c
     ${CMAKE_CURRENT_SOURCE_DIR}/resampler/resample.c
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/trio.c
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/trionan.c
