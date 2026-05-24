@@ -151,6 +151,7 @@ ALL_CXX_SRCS  := $(LIBRETRO_SRCS) $(CORE_SRCS)
 CORE_C_SRCS := \
     $(CORE_DIR)/mednafen/minilzo/minilzo.c \
     $(CORE_DIR)/mednafen/quicklz/quicklz.c \
+    $(CORE_DIR)/mednafen/cputest/cputest.c \
     $(CORE_DIR)/mednafen/resampler/resample.c \
     $(CORE_DIR)/mednafen/trio/trio.c \
     $(CORE_DIR)/mednafen/trio/trionan.c \
