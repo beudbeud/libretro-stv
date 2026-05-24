@@ -11,9 +11,14 @@ add_compile_options(
     -fno-printf-return-value -fstrict-aliasing
 )
 
+if(NOT DEFINED LIBRETRO_CORE_VERSION)
+    set(LIBRETRO_CORE_VERSION "1.2.1")
+endif()
+
 add_compile_definitions(
     _LARGEFILE_SOURCE _LARGEFILE64_SOURCE _FILE_OFFSET_BITS=64
     HAVE_CONFIG_H
+    LIBRETRO_CORE_VERSION="${LIBRETRO_CORE_VERSION}"
     $<$<CONFIG:Release>:_FORTIFY_SOURCE=1>
 )
 

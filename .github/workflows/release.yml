@@ -26,7 +26,8 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }}
           cmake --build build --parallel $(nproc)
 
       - name: Rename artifact
@@ -55,6 +56,7 @@ jobs:
         run: |
           make -f libretro/Makefile.libretro \
                platform=${{ matrix.platform }} \
+               CORE_VERSION=${{ github.ref_name }} \
                -j$(nproc)
 
       - name: Rename artifact

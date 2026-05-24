@@ -55,9 +55,12 @@ endif
 $(shell mkdir -p $(BUILD_DIR))
 $(shell cp $(CORE_DIR)/libretro/config_libretro.h $(BUILD_DIR)/config.h)
 
+CORE_VERSION ?= 1.2.1
+
 DEFINES := \
     -DHAVE_CONFIG_H \
     -DLIBRETRO_BUILD=1 \
+    -DLIBRETRO_CORE_VERSION=\"$(CORE_VERSION)\" \
     -D__LIBRETRO__=1 \
     -DWANT_SS_EMU=1 \
     -DMDFN_DISABLE_PICPIE_ERRWARN=1 \
