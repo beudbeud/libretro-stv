@@ -69,11 +69,22 @@ static uint8_t *port_ptr[2]    = {};
 static std::string sys_dir, save_dir;
 
 /* ── BIOS Skip ─────────────────────────────────────────────────────────────── */
-static bool        g_stv_skip_bios    = false;
-static bool        g_bios_state_saved = false;
+static bool        g_stv_skip_bios      = false;
+static bool        g_bios_state_saved   = false;
 static std::string g_bios_state_path;
-/* Game-start detection: SMPC INTBACK (command 0x10) is how game code polls
- * controllers.  The STV BIOS never issues INTBACK — only game code does. */
+static bool        g_bios_saw_cart_jump = false; /* PC entered cart ROM (0x02000000-0x04FFFFFF) */
+static int         g_bios_stable_frames = 0;     /* consecutive same-page frames after cart jump */
+static uint32_t    g_bios_last_pc_page  = 0xFFFFFFFFu;
+/* Game-start detection strategy:
+ * - Primary  (most games): SMPC INTBACK fires when game polls input. Save after
+ *   30 stable frames post first INTBACK call.
+ * - Fallback (games without INTBACK, e.g. Astra SuperStars, Batman Forever):
+ *   Two-phase PC detection:
+ *   Phase 1 — wait for the BIOS to jump into cart ROM (PC in 0x02000000-0x04FFFFFF).
+ *             The BIOS runs a stable loop in Work RAM (0x0601xxxx) while showing
+ *             its logo; ignoring that loop is critical.
+ *   Phase 2 — after the cart ROM jump, wait for PC stability (120 consecutive
+ *             frames in the same 64 KB page) which marks the game's own loop. */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -426,7 +437,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info *info)
 {
     memset(info, 0, sizeof(*info));
     info->library_name     = "Mednafen STV";
-    info->library_version  = MEDNAFEN_VERSION;
+    info->library_version  = LIBRETRO_CORE_VERSION;
     info->valid_extensions = "zip|ic8|bin|cue|toc|ccd|chd|m3u";
     info->need_fullpath    = true;
     info->block_extract    = true;   /* mednafen handles zip extraction itself */
@@ -538,6 +549,9 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
     g_bios_state_saved      = false;
     g_bios_state_path.clear();
+    g_bios_saw_cart_jump    = false;
+    g_bios_stable_frames    = 0;
+    g_bios_last_pc_page     = 0xFFFFFFFFu;
     if(g_stv_skip_bios) {
         char md5_hex[33] = {};
         for(int i = 0; i < 16; i++)
@@ -769,19 +783,42 @@ RETRO_API void retro_run(void)
     MDFNI_Emulate(&espec);
 
     if(g_stv_skip_bios && !g_bios_state_saved && !g_bios_state_path.empty()) {
-        const uint32_t pc = MDFN_IEN_SS::SS_GetMasterPC();
-        const bool in_bios_rom = (pc < 0x00200000u);
+        const uint32_t pc      = MDFN_IEN_SS::SS_GetMasterPC();
+        const uint32_t intback = MDFN_IEN_SS::SS_GetINTBACKCount();
+        const uint32_t pc_page = pc >> 16;
 
-        /* Fire as soon as SMPC INTBACK has been called and PC is outside BIOS ROM.
-         * The STV BIOS never calls INTBACK; game code does every frame. */
-        const bool game_running = (MDFN_IEN_SS::SS_GetINTBACKCount() > 0 && !in_bios_rom);
+        /* Phase 1: mark when the BIOS first jumps into cart ROM. The BIOS runs
+         * a stable loop in Work RAM (0x0601xxxx) while showing its logo — we
+         * must not treat that loop as the game's loop. */
+        if(!g_bios_saw_cart_jump && pc >= 0x02000000u && pc < 0x05000000u) {
+            g_bios_saw_cart_jump = true;
+            lr_log(RETRO_LOG_INFO, "[skip_bios] cart ROM jump detected at pc=0x%08x\n", pc);
+        }
 
-        if(game_running) {
+        /* Phase 2: PC stability counting only after the cart ROM jump. */
+        if(g_bios_saw_cart_jump || intback > 0) {
+            if(pc_page == g_bios_last_pc_page)
+                g_bios_stable_frames++;
+            else {
+                g_bios_stable_frames = 0;
+                g_bios_last_pc_page  = pc_page;
+            }
+        }
+
+        if((g_bios_stable_frames & 0x3F) == 1)
+            lr_log(RETRO_LOG_INFO, "[skip_bios] pc=0x%08x page=0x%04x stable=%d intback=%u cart_jump=%d\n",
+                   pc, pc_page, g_bios_stable_frames, intback, (int)g_bios_saw_cart_jump);
+
+        const bool trigger = (intback > 0  && g_bios_stable_frames >= 30) ||
+                             (intback == 0 && g_bios_stable_frames >= 120);
+
+        if(trigger) {
             try {
                 Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
                 MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
                 g_bios_state_saved = true;
-                lr_log(RETRO_LOG_INFO, "[skip_bios] state cached: %s\n", g_bios_state_path.c_str());
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state cached (page=0x%04x stable=%d intback=%u): %s\n",
+                       pc_page, g_bios_stable_frames, intback, g_bios_state_path.c_str());
             } catch(...) {
                 g_bios_state_saved = true;
                 lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state: %s\n", g_bios_state_path.c_str());

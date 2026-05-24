@@ -152,6 +152,7 @@
 
 /* ── Libretro build marker ───────────────────────────────────────────────── */
 #define LIBRETRO_BUILD          1
+#define LIBRETRO_CORE_VERSION   "1.2.1"
 
 /* Include mednafen types.h to define uint8/uint16/uint32/uint64,
  * MDFN_bswap*, and include endian.h.
