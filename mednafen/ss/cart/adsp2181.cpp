@@ -14,22 +14,7 @@
 
 #include <cassert>
 #include <cstring>
-#include <cstdio>
 
-/* ── Per-second ring-write diagnostics (read/reset by acclaim_rax.cpp) ───── */
-uint32_t g_ring_total_per_sec = 0;  /* all writes to DM[0x3000..0x33FF] */
-uint32_t g_pm_ring_write_min  = 0xFFFF; /* min PM address written by synthesis in [0x3000..0x33FF] */
-uint32_t g_pm_ring_write_max  = 0x0000; /* max PM address written by synthesis in [0x3000..0x33FF] */
-uint32_t g_ring_nz_per_sec    = 0;  /* non-zero writes */
-uint32_t g_ring_nz_pc[8];          /* PC of first 8 non-zero ring writes this second */
-uint32_t g_ring_nz_pc_cnt     = 0; /* how many PCs captured so far */
-uint32_t g_synth2e90_per_sec  = 0; /* entries into PM[0x2E90] synthesis subroutine */
-uint32_t g_copy008c_per_sec   = 0; /* entries into PM[0x008C] copy subroutine */
-uint32_t g_mainloop_per_sec   = 0; /* entries into PM[0x2176] main loop */
-uint32_t g_synth26ba_per_sec  = 0; /* entries into PM[0x26BA] ISR synthesis */
-uint32_t g_syngate_cmd_per_sec = 0; /* synthesis gate "commands present" path (PC=0x266C) */
-int      g_mix_trace_armed    = 0;  /* set by acclaim_rax when first command queued */
-uint32_t g_mix_trace_budget   = 0;  /* remaining MIX_RD events to log */
 
 /* ── MAME compatibility helpers ────────────────────────────────────────── */
 
@@ -241,14 +226,6 @@ static void update_mstat(ADSP2181 *cpu);
 static void update_i(ADSP2181 *cpu, int which);
 static void update_l(ADSP2181 *cpu, int which);
 
-/* How many instructions left to trace for the current IRQL0 ISR invocation.
- * Set to >0 by generate_irq when IRQL0 fires; decremented in execute_run. */
-static int g_isr_trace_remaining = 0;
-static int g_isr_trace_count     = 0;   /* which invocation we are tracing */
-
-/* Set when synthesis first writes a zero to PM[0x31A3..0x33A2] (game active) */
-static bool g_game_started = false;
-
 /* ── Memory accessors ───────────────────────────────────────────────────── */
 
 /*
@@ -260,263 +237,16 @@ static bool g_game_started = false;
 static inline uint16_t data_read(ADSP2181 *cpu, uint32_t addr)
 {
     addr &= 0x3fff;
-    uint16_t val;
-    if (addr < 0x2000)
-        val = cpu->dm_active_bank[addr];
-    else if (addr < 0x3fe0)
-        val = cpu->dm_upper[addr - 0x2000];
-    else {
-        val = cpu->io_read_cb ? cpu->io_read_cb(cpu, 0x800u + (addr & 0x1f)) : 0xffff;
-    }
-
-    /* Log ALL DM reads from the ISR dispatch area (PC 0x2100..0x2200) */
-    if (cpu->pc >= 0x2100 && cpu->pc <= 0x2200) {
-        static uint32_t isr_rd = 0;
-        if (isr_rd++ < 2048)
-            fprintf(stderr, "[ISR_RD] DM[%04X]=%04X PC=%04X\n",
-                    addr, val, (unsigned)cpu->pc);
-    }
-    /* Trace DM reads from the mixing loop (PC 0x0000..0x0200), gated on g_mix_trace_armed */
-    if (g_mix_trace_armed && cpu->pc <= 0x0200 && g_mix_trace_budget > 0) {
-        g_mix_trace_budget--;
-        fprintf(stderr, "[MIX_RD] DM[%04X]=%04X PC=%04X bank=%d dmov=%u\n",
-                addr, val, (unsigned)cpu->pc,
-                cpu->dm_active_bank_idx, (unsigned)cpu->dmovlay);
-    }
-    /* trace reads from command queue DM[0x3400..0x3490] */
-    if (addr >= 0x3400 && addr < 0x3490) {
-        static uint32_t cq_rd = 0;
-        if (cq_rd++ < 256)
-            fprintf(stderr, "[CQ_RD] DM[%04X]=%04X PC=%04X\n", addr, val, (unsigned)cpu->pc);
-    }
-    /* trace reads near synthesis pointer area DM[0x3100..0x31FF] */
-    if (addr >= 0x3100 && addr < 0x3200) {
-        static uint32_t syn_rd = 0;
-        if (syn_rd++ < 128)
-            fprintf(stderr, "[SYN_RD] DM[%04X]=%04X PC=%04X\n", addr, val, (unsigned)cpu->pc);
-    }
-    /* trace DM[0x3BDA] reads (CNTR for voice synthesis loop) */
-    if (addr == 0x3BDA) {
-        static uint32_t cntr_rd = 0;
-        if (cntr_rd++ < 64)
-            fprintf(stderr, "[CNTR_RD] DM[3BDA]=%04X PC=%04X (#%u)\n", val, (unsigned)cpu->pc, cntr_rd);
-    }
-    /* unconditional trace for DM[0x3BDC] reads — find the FFFF source */
-    if (addr == 0x3BDC || addr == 0x3BDB || addr == 0x3BDE) {
-        static uint32_t bdc_rd = 0;
-        bdc_rd++;
-        if (bdc_rd <= 200)
-            fprintf(stderr, "[BDC_RD] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, val, (unsigned)cpu->pc, bdc_rd);
-    }
-    /* trace reads from voice table DM[0x3B00..0x3C00] */
-    if (addr >= 0x3B00 && addr < 0x3C00 && addr != 0x3BDA) {
-        static uint32_t vt_rd = 0;
-        if (vt_rd++ < 256)
-            fprintf(stderr, "[VT_RD] DM[%04X]=%04X PC=%04X\n", addr, val, (unsigned)cpu->pc);
-    }
-    /* trace ALL DM reads from synthesis outer loop PC=0x2D00..0x2F00 */
-    if (cpu->pc >= 0x2D00 && cpu->pc < 0x2F00) {
-        static uint32_t synth_rd = 0;
-        if (synth_rd++ < 512)
-            fprintf(stderr, "[SYNTH_RD] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, val, (unsigned)cpu->pc, synth_rd);
-    }
-    /* trace reads of the command queue pointers DM[0x3467] and DM[0x3469] (any PC) */
-    if (addr == 0x3467 || addr == 0x3469) {
-        static uint32_t ptr_rd = 0;
-        if (ptr_rd++ < 128)
-            fprintf(stderr, "[PTR_RD] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, val, (unsigned)cpu->pc, ptr_rd);
-    }
-    /* trace ALL DM reads from the voice synthesis subroutine PM[0x3C35..0x3DAB] */
-    if (cpu->pc >= 0x3C35 && cpu->pc <= 0x3DAB) {
-        static uint32_t sub3c35_rd = 0;
-        if (sub3c35_rd++ < 1000)
-            fprintf(stderr, "[SUB3C35_RD] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, val, (unsigned)cpu->pc, sub3c35_rd);
-    }
-    /* trace ALL DM reads from the extended synthesis area PM[0x3DAC..0x3E60] */
-    if (cpu->pc >= 0x3DAC && cpu->pc <= 0x3E60) {
-        static uint32_t sub3dac_rd = 0;
-        if (sub3dac_rd++ < 500)
-            fprintf(stderr, "[SUB3DAC_RD] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, val, (unsigned)cpu->pc, sub3dac_rd);
-    }
-
-    return val;
+    if (addr < 0x2000)  return cpu->dm_active_bank[addr];
+    if (addr < 0x3fe0)  return cpu->dm_upper[addr - 0x2000];
+    return cpu->io_read_cb ? cpu->io_read_cb(cpu, 0x800u + (addr & 0x1f)) : 0xffff;
 }
 
 static inline void data_write(ADSP2181 *cpu, uint32_t addr, uint16_t data)
 {
     addr &= 0x3fff;
-    /* trace writes to the command queue pointers DM[0x3467] and DM[0x3469] (any PC) */
-    if (addr == 0x3467 || addr == 0x3469) {
-        static uint32_t ptr_wr = 0;
-        if (ptr_wr++ < 128)
-            fprintf(stderr, "[PTR_WR] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, data, (unsigned)cpu->pc, ptr_wr);
-    }
-    /* Log ALL DM writes from the ISR dispatch area (PC 0x2100..0x2200) */
-    if (cpu->pc >= 0x2100 && cpu->pc <= 0x2200) {
-        static uint32_t isr_wr = 0;
-        if (isr_wr++ < 2048)
-            fprintf(stderr, "[ISR_DM] DM[%04X]=%04X PC=%04X\n",
-                    addr, data, (unsigned)cpu->pc);
-    }
-    if (addr < 0x2000)
-    {
-        /* trace writes to DM[0x1FE0..0x1FEF] (voice state area) */
-        if (addr >= 0x1FE0 && addr < 0x1FF0) {
-            static uint32_t fe_wr = 0;
-            if (fe_wr++ < 64)
-                fprintf(stderr, "[ADSP] DM[%04X]=%04X PC=%04X\n",
-                        addr, data, (unsigned)cpu->pc);
-        }
-        /* trace ALL DM writes from mixing loop (PC 0x3A50..0x3B00) — first 256 */
-        if (cpu->pc >= 0x3A50 && cpu->pc <= 0x3B00) {
-            static uint32_t mix_wr = 0;
-            if (mix_wr++ < 256)
-                fprintf(stderr, "[MIX_DM] DM[%04X]=%04X PC=%04X (#%u) bank=%d\n",
-                        addr, data, (unsigned)cpu->pc, mix_wr,
-                        cpu->dm_active_bank_idx);
-        }
-        /* trace banked DM writes from synthesis/voice-table-update PC=0x3500..0x3800 */
-        if (cpu->pc >= 0x3500 && cpu->pc < 0x3800) {
-            static uint32_t bk_synout = 0;
-            if (bk_synout++ < 512)
-                fprintf(stderr, "[BK_SYNOUT] DM[%04X]=%04X PC=%04X bank=%d (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, cpu->dm_active_bank_idx, bk_synout);
-        }
-        /* trace first 32 non-zero writes to banked DM from synthesis engine (PC >= 0x3000) */
-        if (data != 0 && cpu->pc >= 0x3000) {
-            static uint32_t bank_syn_wr = 0;
-            if (bank_syn_wr++ < 32)
-                fprintf(stderr, "[BANK_SYN] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, bank_syn_wr);
-        }
-        cpu->dm_active_bank[addr] = data;
-        return;
-    }
-    if (addr < 0x3fe0)
-    {
-        /* trace ring writes DM[0x3000..0x33FF] */
-        if (addr >= 0x3000 && addr < 0x3400) {
-            static uint32_t ring_zero_runs = 0;
-            static uint32_t ring_write_total = 0;
-            ring_write_total++;
-            g_ring_total_per_sec++;
-            /* log PC for first 32 ring writes to identify writer code */
-            if (ring_write_total <= 32)
-                fprintf(stderr, "[RING_PC] write #%u addr=%04X val=%04X PC=%04X\n",
-                        ring_write_total, addr, data, (unsigned)cpu->pc);
-            if (data != 0) {
-                g_ring_nz_per_sec++;
-                if (g_ring_nz_pc_cnt < 8)
-                    g_ring_nz_pc[g_ring_nz_pc_cnt++] = cpu->pc;
-                /* log first 32 non-zero ring writes with value and I1 position */
-                {
-                    static uint32_t nz_ring_log = 0;
-                    if (nz_ring_log++ < 32)
-                        fprintf(stderr, "[RING_NZ] #%u addr=%04X val=%04X PC=%04X I1=%04X I7=%04X\n",
-                                nz_ring_log, addr, data, (unsigned)cpu->pc,
-                                (unsigned)(cpu->i[1] & 0x3FFF),
-                                (unsigned)(cpu->i[7] & 0x3FFF));
-                }
-            }
-            /* detect zeroing sweeps (first 5 only) */
-            if (data == 0 && addr == 0x3000) {
-                ring_zero_runs++;
-                if (ring_zero_runs <= 5)
-                    fprintf(stderr, "[RING_ZERO] zeroing sweep #%u at PC=%04X total_ring_writes=%u\n",
-                            ring_zero_runs, (unsigned)cpu->pc, ring_write_total);
-            }
-            /* log first ring write AFTER synthesis (first post-synthesis zero write in new second) */
-            {
-                static bool first_post_synth = false;
-                if (!first_post_synth && ring_write_total > 15360 && data == 0) {
-                    first_post_synth = true;
-                    uint16_t i4v = (uint16_t)cpu->i[4];
-                    uint32_t pm4v = cpu->pm[i4v & 0x3fff];
-                    uint16_t i1v = (uint16_t)cpu->i[1];
-                    fprintf(stderr, "[POST_SYNTH_RING] first zero write: addr=%04X data=%04X PC=%04X I4=%04X PM[I4]=%06X I1=%04X\n",
-                            addr, data, (unsigned)cpu->pc, i4v, pm4v, i1v);
-                }
-            }
-            /* log sweep end */
-            if (addr == 0x33FF && data == 0 && ring_zero_runs > 0) {
-                static uint32_t sweep_end = 0;
-                if (sweep_end++ < 3)
-                    fprintf(stderr, "[SWEEP_END] ring zeroing done at PC=%04X sweep=%u\n",
-                            (unsigned)cpu->pc, ring_zero_runs);
-            }
-        }
-        /* trace first 64 non-zero dm_upper writes from synthesis engine (PC >= 0x3000) */
-        if (data != 0 && cpu->pc >= 0x3000) {
-            static uint32_t upper_syn_wr = 0;
-            if (upper_syn_wr++ < 64)
-                fprintf(stderr, "[UPPER_SYN] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, upper_syn_wr);
-        }
-        /* trace writes to audio synthesis range [0x3900..0x3E00] with PC */
-        if (addr >= 0x3900 && addr < 0x3E00 && data != 0) {
-            static uint32_t dmu_wr = 0;
-            if (dmu_wr++ < 256)
-                fprintf(stderr, "[DMU] DM[%04X]=%04X PC=%04X\n",
-                        addr, data, (unsigned)cpu->pc);
-        }
-        /* trace ALL writes to DM[0x3BDA] (voice count / CNTR source) — unlimited */
-        if (addr == 0x3BDA) {
-            static uint32_t bda_wr = 0;
-            bda_wr++;
-            fprintf(stderr, "[BDA_WR] DM[3BDA]=%04X PC=%04X (#%u)\n",
-                    data, (unsigned)cpu->pc, bda_wr);
-        }
-        /* trace ALL writes to voice table area DM[0x3B00..0x3BFF] */
-        if (addr >= 0x3B00 && addr < 0x3C00) {
-            static uint32_t vtw = 0;
-            if (vtw++ < 2048)
-                fprintf(stderr, "[VT_WR] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, vtw);
-        }
-        /* unconditional trace for DM[0x3BDC] — must catch the FFFF write */
-        if (addr == 0x3BDC || addr == 0x3BDB || addr == 0x3BDE || addr == 0x3BDA) {
-            static uint32_t bdc_wr = 0;
-            bdc_wr++;
-            fprintf(stderr, "[BDC_WR] DM[%04X]=%04X PC=%04X (#%u)\n",
-                    addr, data, (unsigned)cpu->pc, bdc_wr);
-        }
-        /* trace DM writes from synthesis output loop PC=0x3500..0x3800 (include zeros) */
-        if (cpu->pc >= 0x3500 && cpu->pc < 0x3800) {
-            static uint32_t synout_wr = 0;
-            if (synout_wr++ < 1024)
-                fprintf(stderr, "[SYNOUT] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, synout_wr);
-        }
-        /* trace ALL DM writes from voice synthesis subroutine PM[0x3C35..0x3DAB] */
-        if (cpu->pc >= 0x3C35 && cpu->pc <= 0x3DAB) {
-            static uint32_t sub3c35_wr = 0;
-            if (sub3c35_wr++ < 500)
-                fprintf(stderr, "[SUB3C35_WR] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, sub3c35_wr);
-        }
-        /* trace ALL DM writes from extended synthesis area PM[0x3DAC..0x3E60] */
-        if (cpu->pc >= 0x3DAC && cpu->pc <= 0x3E60) {
-            static uint32_t sub3dac_wr = 0;
-            if (sub3dac_wr++ < 256)
-                fprintf(stderr, "[SUB3DAC_WR] DM[%04X]=%04X PC=%04X (#%u)\n",
-                        addr, data, (unsigned)cpu->pc, sub3dac_wr);
-        }
-        cpu->dm_upper[addr - 0x2000] = data;
-        return;
-    }
-    /* control registers */
-    {
-        static uint32_t ctrl_trace = 0;
-        if (ctrl_trace++ < 256)
-            fprintf(stderr, "[ADSP] DM ctrl write: addr=%04X data=%04X PC=%04X\n",
-                    addr, data, (unsigned)cpu->pc);
-    }
+    if (addr < 0x2000)  { cpu->dm_active_bank[addr] = data; return; }
+    if (addr < 0x3fe0)  { cpu->dm_upper[addr - 0x2000] = data; return; }
     if (cpu->io_write_cb)
         cpu->io_write_cb(cpu, 0x800u + (addr & 0x1f), data);
 }
@@ -547,22 +277,7 @@ static inline uint32_t program_read(ADSP2181 *cpu, uint32_t addr)
 
 static inline void program_write(ADSP2181 *cpu, uint32_t addr, uint32_t data)
 {
-    uint32_t masked = addr & 0x3fff;
-    uint32_t nv = data & 0xffffff;
-    uint32_t old = cpu->pm[masked];
-    /* always trace writes to PM[0x001C] (synthesis hook) */
-    if (masked == 0x001C)
-        fprintf(stderr, "[PM_001C] PM[001C]: %06X → %06X (PC=%04X)\n",
-                old, nv, (unsigned)cpu->pc);
-    /* trace first 128 non-boot PM writes */
-    if (cpu->pc < 0x3800 || cpu->pc > 0x38FF) {
-        static uint32_t pm_wr_cnt = 0;
-        pm_wr_cnt++;
-        if (pm_wr_cnt <= 128)
-            fprintf(stderr, "[PM_WR] PM[%04X]: %06X → %06X (PC=%04X cnt=%u)\n",
-                    masked, old, nv, (unsigned)cpu->pc, pm_wr_cnt);
-    }
-    cpu->pm[masked] = nv;
+    cpu->pm[addr & 0x3fff] = data & 0xffffff;
 }
 
 /* Opcode fetch (same as program_read from current PC) */
@@ -604,12 +319,6 @@ static inline void update_l(ADSP2181 *cpu, int which)
 
 static void update_dmovlay(ADSP2181 *cpu)
 {
-    {
-        static uint32_t dmov_cnt = 0;
-        if (dmov_cnt++ < 64)
-            fprintf(stderr, "[DMOV] dmovlay=%u PC=%04X\n",
-                    (unsigned)m_dmovlay, (unsigned)m_pc);
-    }
     m_dmovlay_cb(m_dmovlay);
 }
 
@@ -691,31 +400,13 @@ static inline uint32_t data_read_dag2(ADSP2181 *cpu, uint32_t op)
 
 static inline void pgm_write_dag2(ADSP2181 *cpu, uint32_t op, int32_t val)
 {
-    uint32_t ireg = 4 + BIT(op, 2, 2);
-    uint32_t mreg = 4 + BIT(op, 0, 2);
-    uint32_t base = m_base[ireg];
-    uint32_t i    = m_i[ireg];
-    uint32_t l    = m_l[ireg];
+    uint32_t ireg   = 4 + BIT(op, 2, 2);
+    uint32_t mreg   = 4 + BIT(op, 0, 2);
+    uint32_t base   = m_base[ireg];
+    uint32_t i      = m_i[ireg];
+    uint32_t l      = m_l[ireg];
     uint32_t pm_val = (val << 8) | m_px;
-    if (i >= 0x31A3 && i <= 0x33A2) {
-        static uint32_t synwr_cnt = 0;
-        if (synwr_cnt++ < 20)
-            fprintf(stderr, "[PM_WR] PM[%04X]=%06X val=%04X m_px=%02X PC=%04X\n",
-                    i, pm_val, (unsigned)(uint16_t)val, (unsigned)(uint8_t)m_px, (unsigned)cpu->pc);
-    }
-    /* Trace writes to the synthesis hook at PM[0x001C] */
-    if (i == 0x001C) {
-        static uint32_t hook_cnt = 0;
-        hook_cnt++;
-        fprintf(stderr, "[PM001C_WR] #%u PM[001C]=%06X->%06X PC=%04X (val=%04X m_px=%02X)\n",
-                hook_cnt, cpu->pm[0x001C], pm_val,
-                (unsigned)cpu->pc, (unsigned)(uint16_t)val, (unsigned)(uint8_t)m_px);
-    }
     program_write(cpu, i, pm_val);
-    if (i >= 0x3000 && i <= 0x33FF) {
-        if (i < g_pm_ring_write_min) g_pm_ring_write_min = i;
-        if (i > g_pm_ring_write_max) g_pm_ring_write_max = i;
-    }
     i = (i + m_m[mreg]) & 0x3fff;
     if      (i < base)     i += l;
     else if (i >= base + l) i -= l;
@@ -730,16 +421,6 @@ static inline uint32_t pgm_read_dag2(ADSP2181 *cpu, uint32_t op)
     uint32_t i    = m_i[ireg];
     uint32_t l    = m_l[ireg];
     uint32_t res  = program_read(cpu, i);
-    /* log first 32 PM reads that produce a non-zero result */
-    {
-        static uint32_t pgrd_nz = 0;
-        static uint32_t pgrd_total = 0;
-        pgrd_total++;
-        uint16_t val16 = (uint16_t)(res >> 8);
-        if (val16 != 0 && pgrd_nz++ < 32)
-            fprintf(stderr, "[PGRD] PM[%04X]=%06X val=%04X I%u base=%04X L=%04X M=%04X PC=%04X #%u\n",
-                    i, res, val16, ireg, base, l, m_m[mreg], (unsigned)cpu->pc, pgrd_total);
-    }
     m_px = res;
     res >>= 8;
     i = (i + m_m[mreg]) & 0x3fff;
@@ -906,13 +587,6 @@ static void write_reg1(ADSP2181 *cpu, int regnum, int32_t val)
         case 0:
             m_i[index] = val & 0x3fff;
             update_i(cpu, index);
-            /* trace I1 writes */
-            if (index == 1) {
-                static uint32_t i1_cnt = 0;
-                if (i1_cnt++ < 64)
-                    fprintf(stderr, "[DAG] I1=0x%04X PC=%04X\n",
-                            m_i[1], (unsigned)m_pc);
-            }
             break;
         case 1:
             m_m[index] = sext(val, 14);
@@ -920,13 +594,6 @@ static void write_reg1(ADSP2181 *cpu, int regnum, int32_t val)
         case 2:
             m_l[index] = val & 0x3fff;
             update_l(cpu, index);
-            /* trace L1 writes */
-            if (index == 1) {
-                static uint32_t l1_cnt = 0;
-                if (l1_cnt++ < 64)
-                    fprintf(stderr, "[DAG] L1=0x%04X PC=%04X\n",
-                            m_l[1], (unsigned)m_pc);
-            }
             break;
         case 3: /* ADSP-2181 overlay registers */
             switch (index)
@@ -947,32 +614,13 @@ static void write_reg2(ADSP2181 *cpu, int regnum, int32_t val)
         case 0:
             m_i[index] = val & 0x3fff;
             update_i(cpu, index);
-            /* trace I4..I7 writes */
-            {
-                static uint32_t i4_cnt = 0;
-                if (i4_cnt++ < 128)
-                    fprintf(stderr, "[DAG] I%d=0x%04X PC=%04X\n",
-                            index, m_i[index], (unsigned)m_pc);
-            }
             break;
         case 1:
             m_m[index] = sext(val, 14);
-            {
-                static uint32_t m4_cnt = 0;
-                if (m4_cnt++ < 128)
-                    fprintf(stderr, "[DAG] M%d=%d PC=%04X\n",
-                            index, m_m[index], (unsigned)m_pc);
-            }
             break;
         case 2:
             m_l[index] = val & 0x3fff;
             update_l(cpu, index);
-            {
-                static uint32_t l4_cnt = 0;
-                if (l4_cnt++ < 128)
-                    fprintf(stderr, "[DAG] L%d=0x%04X PC=%04X\n",
-                            index, m_l[index], (unsigned)m_pc);
-            }
             break;
         default: break;
     }
@@ -986,28 +634,13 @@ static void write_reg3(ADSP2181 *cpu, int regnum, int32_t val)
         case 0x01: m_mstat = val & m_mstat_mask; update_mstat(cpu);          break;
         case 0x03: m_imask = val & m_imask_mask; check_irqs(cpu);            break;
         case 0x04: m_icntl = val & 0x001f;       check_irqs(cpu);            break;
-        case 0x05: cntr_stack_push(cpu); m_cntr = val & 0x3fff;
-            /* log CNTR sets outside of boot range 0x3800..0x38FF */
-            if (m_pc < 0x3800 || m_pc > 0x38FF) {
-                static uint32_t cntr_set = 0;
-                fprintf(stderr, "[CNTR] CNTR=%04X PC=%04X (#%u)\n",
-                        m_cntr, (unsigned)m_pc, ++cntr_set);
-            }
-            break;
+        case 0x05: cntr_stack_push(cpu); m_cntr = val & 0x3fff; break;
         case 0x06: m_core.sb.s = sext(val, 5);                              break;
         case 0x07: m_px = val;                                               break;
-        case 0x09: {
-            static uint32_t tx0_cnt = 0;
-            if (tx0_cnt++ < 16 || (tx0_cnt % 44100) == 0)
-                fprintf(stderr, "[TX0] TX0=%04X PC=%04X (#%u)\n",
-                        (unsigned)(uint16_t)val, (unsigned)m_pc, tx0_cnt);
-            m_sport_tx_cb(0, val, 0xffff);
-            break;
-        }
+        case 0x09: m_sport_tx_cb(0, val, 0xffff); break;
         case 0x0b: m_sport_tx_cb(1, val, 0xffff);                           break;
         case 0x0c:
             m_ifc = val;
-            { static uint32_t ifc_cnt=0; if(ifc_cnt++<32) fprintf(stderr,"[ADSP] IFC=%04X (BDMA_latch=%d) PC=%04X\n", val, (int)m_irq_latch[ADSP2181_BDMA], (unsigned)m_pc); }
             /* ADSP-2181 IFC bits: clear latches */
             if (BIT(val,  1)) m_irq_latch[ADSP2181_IRQ0]     = 0;
             if (BIT(val,  2)) m_irq_latch[ADSP2181_IRQ1]     = 0;
@@ -1385,37 +1018,6 @@ static bool generate_irq(ADSP2181 *cpu, int which, int indx)
 
     m_pc   = 0x04 + indx * 4;
     m_idle = 0;
-    if (which == ADSP2181_IRQL0) {
-        static uint32_t irql0_count = 0;
-        irql0_count++;
-        if (irql0_count <= 10) {
-            /* Arm per-ISR execution trace for the first 10 invocations */
-            g_isr_trace_remaining = 300;
-            g_isr_trace_count     = (int)irql0_count;
-            fprintf(stderr, "[ADSP] IRQL0 ISR fired #%u → entry PC=%04X imask=%04X\n",
-                    irql0_count, (unsigned)m_pc, (unsigned)m_imask);
-        }
-    }
-    if (which == ADSP2181_SPORT0_TX) {
-        static uint32_t sport_tx_count = 0;
-        sport_tx_count++;
-        /* Log first 5 fires, then once per second (~44100 fires) */
-        if (sport_tx_count <= 5 || (sport_tx_count % 44100) == 0) {
-            fprintf(stderr, "[ADSP] SPORT0_TX ISR #%u → PC=%04X CNTR=%u loop=%04X loop_cond=%u PM[001C]=%06X imask=%04X\n",
-                    sport_tx_count, (unsigned)m_pc,
-                    (unsigned)cpu->cntr,
-                    (unsigned)cpu->loop,
-                    (unsigned)cpu->loop_condition,
-                    (unsigned)cpu->pm[0x001C],
-                    (unsigned)m_imask);
-        }
-    }
-    if (which == ADSP2181_BDMA) {
-        static uint32_t bdma_count = 0;
-        if (bdma_count++ < 16)
-            fprintf(stderr, "[ADSP] BDMA ISR fired #%u → PC=%04X imask=%04X\n",
-                    bdma_count, (unsigned)m_pc, (unsigned)m_imask);
-    }
 
     if (m_icntl & 0x10) m_imask &= ~(0x3ff >> indx);
     else                m_imask &= ~0x3ff;
@@ -1534,523 +1136,6 @@ static void execute_run(ADSP2181 *cpu)
     do {
         m_ppc = m_pc;
 
-        /* Track unique PCs visited in main-loop range 0x0050..0x37FF (not boot) */
-        {
-            static uint8_t pc_seen[0x3800] = {};
-            if (m_pc >= 0x0050 && m_pc < 0x3800 && !pc_seen[m_pc]) {
-                pc_seen[m_pc] = 1;
-                fprintf(stderr, "[PC_NEW] %04X op=%06X\n", (unsigned)m_pc, cpu->pm[m_pc & 0x3fff]);
-            }
-        }
-
-        if (g_isr_trace_remaining > 0) {
-            fprintf(stderr, "[ISR%d] PC=%04X op=%06X AR=%04X AX0=%04X AX1=%04X imask=%03X\n",
-                    g_isr_trace_count,
-                    m_pc, cpu->pm[m_pc & 0x3fff],
-                    (unsigned)(uint16_t)m_core.ar.s,
-                    (unsigned)(uint16_t)m_core.ax0.s,
-                    (unsigned)(uint16_t)m_core.ax1.s,
-                    (unsigned)m_imask);
-            g_isr_trace_remaining--;
-        }
-
-        /* Dump PM[0x2E90..0x2EBF] and I/L/M regs on first entry to load/zero area */
-        {
-            static bool pm2e9_dumped = false;
-            if (!pm2e9_dumped && m_pc == 0x2E9C) {
-                pm2e9_dumped = true;
-                fprintf(stderr, "[PM2E9] PM[2E90..2EBF]:\n");
-                for (int _p = 0x2E90; _p <= 0x2EBF; _p++)
-                    fprintf(stderr, "[PM2E9]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-                fprintf(stderr, "[PM2E9] I0..I7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_i[0], m_i[1], m_i[2], m_i[3], m_i[4], m_i[5], m_i[6], m_i[7]);
-                fprintf(stderr, "[PM2E9] L0..L7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_l[0], m_l[1], m_l[2], m_l[3], m_l[4], m_l[5], m_l[6], m_l[7]);
-                fprintf(stderr, "[PM2E9] M0..M7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_m[0], m_m[1], m_m[2], m_m[3], m_m[4], m_m[5], m_m[6], m_m[7]);
-            }
-        }
-
-        /* One-time PM dump of synthesis DO loop area at first entry */
-        {
-            static bool syn_pm_dumped = false;
-            if (!syn_pm_dumped && m_pc == 0x00AC) {
-                syn_pm_dumped = true;
-                fprintf(stderr, "[SYN_PM] PM[00A0..00CF]:\n");
-                for (int _p = 0x00A0; _p <= 0x00CF; _p++)
-                    fprintf(stderr, "[SYN_PM]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-                fprintf(stderr, "[SYN_PM] I0..I7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_i[0], m_i[1], m_i[2], m_i[3], m_i[4], m_i[5], m_i[6], m_i[7]);
-                fprintf(stderr, "[SYN_PM] L0..L7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_l[0], m_l[1], m_l[2], m_l[3], m_l[4], m_l[5], m_l[6], m_l[7]);
-                fprintf(stderr, "[SYN_PM] M0..M7: %04X %04X %04X %04X %04X %04X %04X %04X\n",
-                        m_m[0], m_m[1], m_m[2], m_m[3], m_m[4], m_m[5], m_m[6], m_m[7]);
-            }
-        }
-
-        /* trace I4 at DO loop start — every invocation, compact */
-        {
-            static uint32_t do_loop_cnt = 0;
-            if (m_pc == 0x00AC) {
-                do_loop_cnt++;
-                uint16_t i4 = m_i[4];
-                /* Print first 4, then every 5th around loop 30 */
-                if (do_loop_cnt <= 4 || (do_loop_cnt >= 28 && do_loop_cnt <= 38))
-                    fprintf(stderr, "[I4] DO #%u: I4=0x%04X I1=0x%04X pc_sp=%u\n",
-                            do_loop_cnt, i4, m_i[1], (unsigned)m_pc_sp);
-                /* Dump DAG2 context for calls #21-34 to compare synthesis vs post-synthesis */
-                if (do_loop_cnt >= 21 && do_loop_cnt <= 34) {
-                    uint16_t caller = (m_pc_sp > 0) ? m_pc_stack[m_pc_sp - 1] : 0xFFFF;
-                    fprintf(stderr, "[COPY_DAG2] call #%u caller=%04X I4=%04X L4=%04X base4=%04X M5=%04X MSTAT=%02X\n",
-                            do_loop_cnt, caller, i4,
-                            (unsigned)m_l[4], (unsigned)m_base[4], (unsigned)m_m[5],
-                            (unsigned)m_mstat);
-                    /* Also dump PM around I4 */
-                    fprintf(stderr, "[COPY_PM] call #%u I4=%04X:", do_loop_cnt, i4);
-                    for (int _p = (int)i4; _p < (int)i4 + 8; _p++)
-                        fprintf(stderr, " %04X=%06X", (unsigned)(_p & 0x3fff), cpu->pm[_p & 0x3fff]);
-                    fprintf(stderr, "\n");
-                }
-            }
-        }
-
-        /* Trace copy subroutine: PM[0x008C] entry and I1 after DM[0x3465] load */
-        {
-            static uint32_t copy008c_cnt = 0;
-            if (m_pc == 0x008C) { copy008c_cnt++; g_copy008c_per_sec++; }
-            /* Trace I1 value just after DM[3465] is loaded: calls #21..#42 */
-            if (m_pc == 0x008E && copy008c_cnt >= 21 && copy008c_cnt <= 42) {
-                uint16_t dm3465 = (uint16_t)data_read(cpu, 0x3465);
-                uint16_t caller = (m_pc_sp > 0) ? m_pc_stack[m_pc_sp - 1] : 0xFFFF;
-                fprintf(stderr, "[COPY I1] call #%u: I1=%04X DM[3465]=%04X caller=%04X\n",
-                        copy008c_cnt, m_i[1], dm3465, caller);
-            }
-        }
-
-        /* trace main loop entry at PC=0x2176 */
-        {
-            static uint32_t main_loop_cnt = 0;
-            if (m_pc == 0x2176) {
-                main_loop_cnt++;
-                g_mainloop_per_sec++;
-                if (main_loop_cnt <= 8)
-                    fprintf(stderr, "[MAIN] entry #%u I0=%04X I4=%04X I6=%04X AX0=%04X\n",
-                            main_loop_cnt, m_i[0], m_i[4], m_i[6],
-                            (unsigned)(uint16_t)m_core.ax0.s);
-            }
-        }
-
-        /* trace ISR synthesis at PM[0x26BA] */
-        {
-            if (m_pc == 0x26BA) {
-                g_synth26ba_per_sec++;
-                static uint32_t cnt26ba = 0;
-                cnt26ba++;
-                if (cnt26ba <= 5) {
-                    uint16_t caller = (m_pc_sp > 0) ? m_pc_stack[m_pc_sp - 1] : 0xFFFF;
-                    fprintf(stderr, "[ISR_SYN] entry #%u caller=%04X I4=%04X IMASK=%04X AR=%04X\n",
-                            cnt26ba, caller, (unsigned)m_i[4],
-                            (unsigned)m_imask, (unsigned)(uint16_t)m_core.ar.u);
-                }
-            }
-        }
-
-        /* trace PM[0x001C] patch: any pgm_write to address 0x001C */
-        /* (handled inside pgm_write_dag2 separately) */
-
-        /* trace PM[0x001C] value when DO UNTIL reaches it (PC=0x001C) */
-        {
-            static uint32_t pm001c_cnt = 0;
-            if (m_pc == 0x001C) {
-                pm001c_cnt++;
-                uint32_t op = cpu->pm[0x001C];
-                if (pm001c_cnt <= 20 || (pm001c_cnt % 1000) == 0)
-                    fprintf(stderr, "[PM001C] visit #%u PC=001C op=%06X CNTR=%u\n",
-                            pm001c_cnt, op, (unsigned)m_cntr);
-            }
-        }
-
-        /* Trace every instruction in PM[0x2E60..0x2EBF] outside inner DO loops, for first 100 + last 50 of DO */
-        {
-            static uint32_t synblk_cnt = 0;
-            static bool in_do_loop = false;
-            if (m_pc >= 0x2E60 && m_pc <= 0x2EBF) {
-                bool is_do_inner = (m_pc >= 0x2EA9 && m_pc <= 0x2EAB);
-                /* always trace non-inner instructions; for inner: first 12 and every 3rd when CNTR<=3 */
-                bool do_trace = !is_do_inner
-                    || synblk_cnt < 12
-                    || m_cntr <= 3;
-                synblk_cnt++;
-                if (do_trace) {
-                    uint32_t _op = cpu->pm[m_pc & 0x3fff];
-                    fprintf(stderr, "[SYN_BLK] #%u PC=%04X op=%06X I4=%04X CNTR=%u loop=%04X\n",
-                            synblk_cnt, (unsigned)m_pc, _op,
-                            (unsigned)m_i[4], (unsigned)m_cntr, (unsigned)m_loop);
-                }
-            }
-        }
-
-        /* Once game is active, dump PM[0x008C..0x00CF] once to see runtime code */
-        {
-            static bool runtime_pm_dumped = false;
-            if (!runtime_pm_dumped && g_game_started && m_pc == 0x2EA0) {
-                runtime_pm_dumped = true;
-                fprintf(stderr, "[RT_PM] PM[008C..00CF] after game start:\n");
-                for (int _p = 0x008C; _p <= 0x00CF; _p++)
-                    fprintf(stderr, "[RT_PM]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-                fprintf(stderr, "[RT_PM] MSTAT=%02X (BANK=%d)\n",
-                        (unsigned)m_mstat, (m_mstat & MSTAT_BANK) ? 1 : 0);
-            }
-        }
-
-        /* Per-instruction trace in synthesis inner loop PM[2E94..2E9A] for first 3 iters */
-        {
-            static uint32_t syn_insn_cnt = 0;
-            if (m_pc >= 0x2E94 && m_pc <= 0x2E9B) {
-                syn_insn_cnt++;
-                if (syn_insn_cnt <= 24) {
-                    uint32_t _op = cpu->pm[m_pc & 0x3fff];
-                    fprintf(stderr, "[SYN_INSN] #%02u PC=%04X op=%06X AR=%04X AY0=%04X CNTR=%04X ASTAT=%02X\n",
-                            syn_insn_cnt, (unsigned)m_pc, _op,
-                            (unsigned)(uint16_t)m_core.ar.u,
-                            (unsigned)(uint16_t)m_core.ay0.u,
-                            (unsigned)m_cntr,
-                            (unsigned)m_astat);
-                }
-            }
-        }
-
-        /* Trace AR at start of synthesis DO loop PM[0x2EA8] */
-        {
-            static uint32_t syn_do_cnt = 0;
-            if (m_pc == 0x2EA8 && syn_do_cnt < 5) {
-                syn_do_cnt++;
-                fprintf(stderr, "[SYN_DO] #%u PC=2EA8 AR=%04X MR0=%04X MR1=%04X I4=%04X CNTR=%u\n",
-                        syn_do_cnt,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr1.u,
-                        (unsigned)m_i[4], (unsigned)m_cntr);
-            }
-        }
-
-        /* Count synthesis subroutine entries per second, and log caller */
-        if (m_pc == 0x2E90) {
-            g_synth2e90_per_sec++;
-            /* log caller PC (top of call stack) and CNTR, DM[3BDA] */
-            uint16_t caller = (m_pc_sp > 0) ? m_pc_stack[m_pc_sp - 1] : 0xFFFF;
-            uint16_t dm3bda = (uint16_t)data_read(cpu, 0x3BDA);
-            fprintf(stderr, "[SYNTH] call #%u caller_pc=%04X CNTR=%u DM[3BDA]=%04X I4=%04X\n",
-                    g_synth2e90_per_sec, caller, (unsigned)m_cntr, dm3bda, (unsigned)m_i[4]);
-            /* dump PM around caller so we understand the outer loop */
-            if (g_synth2e90_per_sec == 1) {
-                uint16_t base_pc = (caller > 0x20) ? (caller - 0x20) : 0;
-                fprintf(stderr, "[SYNTH_CTX] PM[%04X..%04X]:", base_pc, base_pc + 0x3F);
-                for (int _p = base_pc; _p <= base_pc + 0x3F; _p++)
-                    fprintf(stderr, " %04X=%06X", _p, cpu->pm[_p & 0x3fff]);
-                fprintf(stderr, "\n");
-                /* also dump the full synthesis subroutine from 0x2E3A so we can trace the flow */
-                fprintf(stderr, "[SYNTH_CTX2] PM[2E3A..2E90]:\n");
-                for (int _p = 0x2E3A; _p <= 0x2E90; _p++)
-                    fprintf(stderr, "[SYNTH_CTX2]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-            }
-        }
-
-        /* Trace synthesis subroutine entry PM[0x2E3A]: log CNTR + key regs, first 20 hits */
-        {
-            static uint32_t syn_entry_cnt = 0;
-            if (m_pc == 0x2E3A && syn_entry_cnt < 20) {
-                syn_entry_cnt++;
-                uint16_t dm3bda = (uint16_t)data_read(cpu, 0x3BDA);
-                fprintf(stderr, "[SYN2E3A] #%u CNTR=%u AR=%04X AX0=%04X MR0=%04X DM[3BDA]=%04X I4=%04X I6=%04X\n",
-                        syn_entry_cnt, (unsigned)m_cntr,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.ax0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        dm3bda,
-                        (unsigned)m_i[4], (unsigned)m_i[6]);
-            }
-        }
-
-        /* Trace voice-activator entry (PM[0x2E62] = CALL 0x215B always) and gate points */
-        {
-            static uint32_t vact_cnt = 0;
-            /* PM[0x2E62]: voice activator entered */
-            if (m_pc == 0x2E62 && vact_cnt < 30) {
-                vact_cnt++;
-                uint16_t dm3bd7 = (uint16_t)data_read(cpu, 0x3BD7);
-                uint16_t dm3bd8 = (uint16_t)data_read(cpu, 0x3BD8);
-                uint16_t dm3bda = (uint16_t)data_read(cpu, 0x3BDA);
-                fprintf(stderr, "[VACT_IN] #%u AR=%04X MR0=%04X MR1=%04X DM[3BD7]=%04X DM[3BD8]=%04X DM[3BDA]=%04X\n",
-                        vact_cnt,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr1.u,
-                        dm3bd7, dm3bd8, dm3bda);
-            }
-        }
-        /* PM[0x2E66]: first gate — AR = DM[0x3BD7]+MR0, IF LT RTS */
-        {
-            static uint32_t gate1_cnt = 0;
-            if (m_pc == 0x2E66 && gate1_cnt < 20) {
-                gate1_cnt++;
-                fprintf(stderr, "[GATE1] #%u AR=%04X MR0=%04X AX0=%04X ASTAT=%02X (LT=%d → %s)\n",
-                        gate1_cnt,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)(uint16_t)m_core.ax0.u,
-                        (unsigned)m_astat,
-                        (m_astat >> 1) & 1,   /* LT bit in ASTAT */
-                        ((m_astat >> 1) & 1) ? "RTS" : "continue");
-            }
-        }
-        /* PM[0x2E6F]: second gate — alu_op_none(SR0+MR0), IF LE RTS */
-        {
-            static uint32_t gate2_cnt = 0;
-            if (m_pc == 0x2E6F && gate2_cnt < 20) {
-                gate2_cnt++;
-                uint16_t dm3bd8 = (uint16_t)data_read(cpu, 0x3BD8);
-                fprintf(stderr, "[GATE2] #%u BEFORE: AR=%04X SR0=%04X MR0=%04X MR1=%04X DM[3BD8]=%04X ASTAT=%02X\n",
-                        gate2_cnt,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.sr.srx.sr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr1.u,
-                        dm3bd8,
-                        (unsigned)m_astat);
-            }
-        }
-        /* PM[0x2E70]: gate 2 decision (IF LE RTS) */
-        {
-            static uint32_t gate2b_cnt = 0;
-            if (m_pc == 0x2E70 && gate2b_cnt < 20) {
-                gate2b_cnt++;
-                /* ASTAT now reflects result of alu_op_none(SR0+MR0) at 0x2E6F */
-                fprintf(stderr, "[GATE2B] #%u AFTER_ALUOP: ASTAT=%02X (AZ=%u AN=%u AV=%u) LE=%u → %s\n",
-                        gate2b_cnt,
-                        (unsigned)m_astat,
-                        (m_astat & 0x01) ? 1 : 0,   /* AZ */
-                        (m_astat & 0x02) ? 1 : 0,   /* AN */
-                        (m_astat & 0x04) ? 1 : 0,   /* AV */
-                        (((m_astat>>1)&1 ^ (m_astat>>2)&1) | (m_astat&1)) ? 1 : 0,
-                        (((m_astat>>1)&1 ^ (m_astat>>2)&1) | (m_astat&1)) ? "RTS (skip synth)" : "continue to synth2E90");
-            }
-        }
-        /* PM[0x2E03]: voice activator call site — check SR0+MR0 BEFORE alu_op_none */
-        {
-            static uint32_t e03_cnt = 0;
-            if (m_pc == 0x2E03 && e03_cnt < 10) {
-                e03_cnt++;
-                fprintf(stderr, "[E03] #%u SR0=%04X MR0=%04X ASTAT=%02X (NE=%u → %s)\n",
-                        e03_cnt,
-                        (unsigned)(uint16_t)m_core.sr.srx.sr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)m_astat,
-                        ((m_astat & 0x01) == 0) ? 1 : 0,   /* NE = !AZ */
-                        ((m_astat & 0x01) == 0) ? "CALL activator" : "skip");
-            }
-        }
-        /* PM[0x2E10]: second voice activator call site */
-        {
-            static uint32_t e10_cnt = 0;
-            if (m_pc == 0x2E10 && e10_cnt < 10) {
-                e10_cnt++;
-                uint16_t dm3bd4 = (uint16_t)data_read(cpu, 0x3BD4);
-                fprintf(stderr, "[E10] #%u AR=%04X AY0=%04X SR0=%04X MR0=%04X ASTAT=%02X DM[3BD4]=%04X (NE=%u → %s)\n",
-                        e10_cnt,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.ay0.u,
-                        (unsigned)(uint16_t)m_core.sr.srx.sr0.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u,
-                        (unsigned)m_astat,
-                        dm3bd4,
-                        ((m_astat & 0x01) == 0) ? 1 : 0,
-                        ((m_astat & 0x01) == 0) ? "CALL activator" : "skip");
-            }
-        }
-        /* PM[0x2DDE]: routing decision — DM[3BD4] check — and PM[0x2DE2]: DM[3BD5] check */
-        {
-            static uint32_t dde_cnt = 0;
-            if (m_pc == 0x2DDE && dde_cnt < 6) {
-                dde_cnt++;
-                uint16_t dm3bd4 = (uint16_t)data_read(cpu, 0x3BD4);
-                uint16_t dm3bd5 = (uint16_t)data_read(cpu, 0x3BD5);
-                fprintf(stderr, "[DDE] #%u AR=%04X ASTAT=%02X DM[3BD4]=%04X DM[3BD5]=%04X\n",
-                        dde_cnt, (unsigned)(uint16_t)m_core.ar.u, (unsigned)m_astat, dm3bd4, dm3bd5);
-            }
-        }
-
-        /* Trace DM[0x3BDA] and CNTR at PM[2E9E] (loop count for CALL 008C) */
-        {
-            static uint32_t pm2e9e_cnt = 0;
-            if (m_pc == 0x2E9E && pm2e9e_cnt < 8) {
-                pm2e9e_cnt++;
-                uint16_t dm3bda = (uint16_t)data_read(cpu, 0x3BDA);
-                uint16_t dm3bd7 = (uint16_t)data_read(cpu, 0x3BD7);
-                fprintf(stderr, "[2E9E] #%u DM[3BDA]=%04X DM[3BD7]=%04X I4=%04X\n",
-                        pm2e9e_cnt, dm3bda, dm3bd7, (unsigned)m_i[4]);
-            }
-        }
-
-        /* One-time PM dump of pf0 polling area on first entry to 0x2160..0x2170 */
-        {
-            static bool pf0_pm_dumped = false;
-            if (!pf0_pm_dumped && m_pc >= 0x2160 && m_pc <= 0x2170) {
-                pf0_pm_dumped = true;
-                fprintf(stderr, "[PF0_PM] PM[2155..2195] (pf0 polling area):\n");
-                for (int _p = 0x2155; _p <= 0x2195; _p++)
-                    fprintf(stderr, "[PF0_PM]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-                fprintf(stderr, "[PF0_PM] AX0=%04X AR=%04X ASTAT=%02X MSTAT=%02X\n",
-                        (unsigned)(uint16_t)m_core.ax0.u,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)m_astat, (unsigned)m_mstat);
-            }
-        }
-
-        /* Per-instruction trace for pf0 polling area 0x2160..0x2175 (first 48 hits) */
-        {
-            static uint32_t pf0_insn_cnt = 0;
-            if (m_pc >= 0x2160 && m_pc <= 0x2175 && pf0_insn_cnt < 48) {
-                pf0_insn_cnt++;
-                uint32_t _op = cpu->pm[m_pc & 0x3fff];
-                fprintf(stderr, "[PF0_INSN] #%u PC=%04X op=%06X AX0=%04X AR=%04X ASTAT=%02X fl0=%u pf0=%u\n",
-                        pf0_insn_cnt, (unsigned)m_pc, _op,
-                        (unsigned)(uint16_t)m_core.ax0.u,
-                        (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)m_astat,
-                        (unsigned)cpu->fl0,
-                        (unsigned)cpu->fl0);  /* placeholder until we know real pf0 addr */
-            }
-        }
-
-        /* One-time dump of runtime PM[0x2655..0x26C0] (voice-count gate + synthesis dispatcher) */
-        {
-            static bool synth_pm_dumped = false;
-            if (!synth_pm_dumped && m_pc == 0x266A) {
-                synth_pm_dumped = true;
-                fprintf(stderr, "[SYNGATE_PM] PM[2655..26C0] runtime dump:\n");
-                for (int _p = 0x2655; _p <= 0x26C0; _p++)
-                    fprintf(stderr, "[SYNGATE_PM]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-            }
-        }
-
-        /* Trace AR/AY0 at PM[0x266A] (voice-count gate: AR-AY0, skip if AZ) */
-        {
-            static uint32_t syngate_cnt = 0;
-            if (m_pc == 0x266A) {
-                uint16_t dm3467 = (uint16_t)data_read(cpu, 0x3467);
-                uint16_t i1val  = (uint16_t)m_i[1];
-                bool cmd_present = (dm3467 != i1val);
-                /* Log first 20 always; after that log every time commands are present */
-                bool do_log = (syngate_cnt < 20) || (cmd_present && syngate_cnt < 100);
-                if (do_log) {
-                    syngate_cnt++;
-                    uint16_t dm3464 = (uint16_t)data_read(cpu, 0x3464);
-                    fprintf(stderr, "[SYNGATE] #%u AR=%04X AY0(I1)=%04X I1=%04X DM[3467]=%04X %s DM[3464]=%04X ASTAT=%02X\n",
-                            syngate_cnt,
-                            (unsigned)(uint16_t)m_core.ar.u,
-                            (unsigned)(uint16_t)m_core.ay0.u,
-                            i1val, dm3467,
-                            cmd_present ? "CMD_PRESENT" : "no_cmd",
-                            dm3464, (unsigned)m_astat);
-                } else if (!do_log) {
-                    syngate_cnt++;
-                }
-            }
-        }
-
-        /* Trace synthesis gate commands-present path (PM[0x266C] entered) */
-        {
-            static uint32_t cmd266c_cnt = 0;
-            if (m_pc == 0x266C) {
-                cmd266c_cnt++;
-                g_syngate_cmd_per_sec++;
-                if (cmd266c_cnt <= 30) {
-                    uint16_t dm3467 = (uint16_t)data_read(cpu, 0x3467);
-                    uint16_t dm3400 = (uint16_t)data_read(cpu, 0x3400);
-                    uint16_t dm3401 = (uint16_t)data_read(cpu, 0x3401);
-                    fprintf(stderr, "[SYNGATE_CMDPATH] #%u I0=%04X I1=%04X I2=%04X I6=%04X DM[3467]=%04X DM[3400]=%04X DM[3401]=%04X AR=%04X\n",
-                            cmd266c_cnt,
-                            (unsigned)m_i[0], (unsigned)m_i[1],
-                            (unsigned)m_i[2], (unsigned)m_i[6],
-                            dm3467, dm3400, dm3401,
-                            (unsigned)(uint16_t)m_core.ar.u);
-                }
-            }
-        }
-
-        /* Trace synthesis gate no-commands path (PM[0x26A8] entered) */
-        {
-            static uint32_t nocmd26a8_cnt = 0;
-            if (m_pc == 0x26A8) {
-                if (nocmd26a8_cnt++ < 5)
-                    fprintf(stderr, "[SYNGATE_NOCMD] #%u I1=%04X DM[3467]=%04X\n",
-                            nocmd26a8_cnt, (unsigned)m_i[1],
-                            (uint16_t)data_read(cpu, 0x3467));
-            }
-        }
-
-        /* One-time dump of PM[0x2DA3..0x2E3A] — full synthesis main + voice scheduler */
-        {
-            static bool synmain_dumped = false;
-            if (!synmain_dumped && m_pc == 0x2DA3) {
-                synmain_dumped = true;
-                fprintf(stderr, "[SYNMAIN_PM] PM[2DA3..2E3A] complete runtime dump:\n");
-                for (int _p = 0x2DA3; _p <= 0x2E3A; _p++)
-                    fprintf(stderr, "[SYNMAIN_PM]  PM[%04X] = %06X\n", _p, cpu->pm[_p & 0x3fff]);
-            }
-        }
-        /* Trace synthesis main entry (PM[0x2DA3]) — log DM[0x3467] on each call */
-        {
-            static uint32_t synmain_call_cnt = 0;
-            if (m_pc == 0x2DA3 && synmain_call_cnt < 16) {
-                synmain_call_cnt++;
-                uint16_t dm3467 = (uint16_t)data_read(cpu, 0x3467);
-                uint16_t dm3bd4 = (uint16_t)data_read(cpu, 0x3BD4);
-                fprintf(stderr, "[SYNMAIN] #%u entry DM[3467]=%04X DM[3BD4]=%04X AR=%04X\n",
-                        synmain_call_cnt, dm3467, dm3bd4,
-                        (unsigned)(uint16_t)m_core.ar.u);
-            }
-            /* PM[0x2DB0]: early-exit check — DM[3467] vs 0x3400 */
-            if (m_pc == 0x2DB0 && synmain_call_cnt <= 16) {
-                static uint32_t db0_cnt = 0;
-                if (db0_cnt++ < 32) {
-                    uint16_t dm3467 = (uint16_t)data_read(cpu, 0x3467);
-                    fprintf(stderr, "[SYNMAIN_DB0] #%u DM[3467]=%04X (== 0x3400? %s)\n",
-                            db0_cnt, dm3467, dm3467 == 0x3400 ? "YES→proceed" : "NO→early_exit");
-                }
-            }
-        }
-        /* Trace key PCs inside synthesis main to understand control flow */
-        {
-            static uint32_t pc_db5 = 0, pc_dc0 = 0, pc_dd0 = 0, pc_e12 = 0, pc_e13 = 0;
-            if (m_pc == 0x2DB5 && pc_db5 < 5) {
-                pc_db5++;
-                fprintf(stderr, "[FLOW] PC=2DB5 (RTS?) ASTAT=%02X AR=%04X MR0=%04X #%u\n",
-                        (unsigned)m_astat, (unsigned)(uint16_t)m_core.ar.u,
-                        (unsigned)(uint16_t)m_core.mr.mrx.mr0.u, pc_db5);
-            }
-            if (m_pc == 0x2DC0 && pc_dc0 < 5) {
-                pc_dc0++;
-                fprintf(stderr, "[FLOW] PC=2DC0 #%u AR=%04X CNTR=%u\n",
-                        pc_dc0, (unsigned)(uint16_t)m_core.ar.u, (unsigned)m_cntr);
-            }
-            if (m_pc == 0x2DD0 && pc_dd0 < 5) {
-                pc_dd0++;
-                fprintf(stderr, "[FLOW] PC=2DD0 (CALL 2E3A) #%u CNTR=%u loop=%04X\n",
-                        pc_dd0, (unsigned)m_cntr, (unsigned)m_loop);
-            }
-            if (m_pc == 0x2E12 && pc_e12 < 5) {
-                pc_e12++;
-                fprintf(stderr, "[FLOW] PC=2E12 (DO end) #%u CNTR=%u cond=%u\n",
-                        pc_e12, (unsigned)m_cntr, (unsigned)m_loop_condition);
-            }
-            if (m_pc == 0x2E13 && pc_e13 < 5) {
-                pc_e13++;
-                fprintf(stderr, "[FLOW] PC=2E13 (post DO) #%u\n", pc_e13);
-            }
-        }
-
         uint32_t op = opcode_read(cpu);
 
         /* advance PC / handle loop */
@@ -2152,15 +1237,8 @@ static void execute_run(ADSP2181 *cpu)
                 if (condition(BIT(op, 0, 4)))
                 {
                     pc_stack_pop(cpu);
-                    if (BIT(op, 4)) {
+                    if (BIT(op, 4))
                         stat_stack_pop(cpu);
-                        /* RTI: stop ISR trace and log return destination */
-                        if (g_isr_trace_remaining > 0) {
-                            fprintf(stderr, "[ISR%d] RTI → PC=%04X (had %d insns left)\n",
-                                    g_isr_trace_count, m_pc, g_isr_trace_remaining);
-                            g_isr_trace_remaining = 0;
-                        }
-                    }
                 }
                 break;
 
@@ -2238,13 +1316,6 @@ static void execute_run(ADSP2181 *cpu)
             case 0x1c: case 0x1d: case 0x1e: case 0x1f: /* conditional call */
                 if (condition(BIT(op,0,4))) {
                     uint32_t call_target = BIT(op,4,14);
-                    /* log all CALLs from main loop area (not boot 0x38xx) */
-                    if (m_ppc < 0x3800 || m_ppc > 0x38FF) {
-                        static uint32_t call_cnt = 0;
-                        if (call_cnt++ < 256)
-                            fprintf(stderr, "[CALL] %04X → %04X (#%u)\n",
-                                    (unsigned)m_ppc, call_target, call_cnt);
-                    }
                     pc_stack_push(cpu); m_pc = call_target;
                 }
                 break;

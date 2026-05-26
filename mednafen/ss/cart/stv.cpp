@@ -121,12 +121,8 @@ static MDFN_HOT void RAX_Read16_STV(uint32 A, uint16* DB)
  * ignored per MAME's FIXME comment. */
 static MDFN_HOT void RAX_Write16(uint32 A, uint16* DB)
 {
- static uint32_t rax_wr_cnt = 0;
- rax_wr_cnt++;
- if((A & 2) == 0) {
-  fprintf(stderr, "[STV] RAX cmd #%u A=%08X val=%04X\n", rax_wr_cnt, (unsigned)A, (unsigned)*DB);
+ if((A & 2) == 0)
   RAX_WriteCommand(*DB);
- }
 }
 
 static MDFN_HOT void RAX_Write8(uint32 A, uint16* DB)
