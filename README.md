@@ -80,18 +80,17 @@ Tate (vertical cabinet) games are detected automatically from the game database 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `mednafen_stv_region` | `auto` | BIOS region: Auto / Japan / North America / Europe |
-| `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation |
+| `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation. Restart required. |
 | `mednafen_stv_h_overscan` | `enabled` | Show horizontal overscan pixels |
 | `mednafen_stv_h_blend` | `disabled` | Horizontal blend filter (anti-dithering) |
 | `mednafen_stv_correct_aspect` | `enabled` | Correct pixel aspect ratio |
-| `mednafen_stv_mesh_transparency` | `disabled` | Improved mesh transparency (CPU-side, ported from Kronos) |
-| `mednafen_stv_deinterlacer` | `disabled` | 480i deinterlacer: disabled / bob (renderer) / bob (SW) |
-| `mednafen_stv_vdp1_instant` | `disabled` | VDP1INSTANT: reduces frame lag and eliminates stripe artifacts |
+| `mednafen_stv_mesh_transparency` | `disabled` | Replace VDP1 stipple (checkerboard) with 50% blend for smoke/shadow/fade effects. 16-bit framebuffer only. |
+| `mednafen_stv_deinterlacer` | `blend` | 480i handling: Blend (smooth, recommended) / Off (renderer bob) / Weave / Bob / Bob with offset / Blend gamma-correct |
 | `mednafen_stv_frameskip` | `disabled` | Frameskip: disabled / auto / 1–5 |
-| `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0–239) |
-| `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (0–239) |
+| `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0 / 2 / 4 / 8) |
+| `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
 | `mednafen_stv_cart` | `auto` | Expansion cart: Auto / None / Backup RAM / 4M RAM / 8M RAM |
-| `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: Fast (recommended) / Data cache only / Full (accurate, slow). Restart required. |
+| `mednafen_stv_cpu_cache` | `fast` | SH-2 cache emulation: Fast (recommended) / Data cache only / Full (accurate, slow). Restart required. |
 | `mednafen_stv_bios_sanity` | `enabled` | Verify BIOS SHA-256 checksums at load |
 | `mednafen_stv_autortc` | `enabled` | Auto-set Real Time Clock from host |
 | `mednafen_stv_autortc_lang` | `english` | BIOS language (English / Japanese / French / German / Spanish / Italian) |

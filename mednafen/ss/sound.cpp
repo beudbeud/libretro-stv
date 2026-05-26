@@ -36,6 +36,9 @@
 
 namespace MDFN_IEN_SS
 {
+
+/* Forward declaration — defined in cart/acclaim_rax.cpp */
+void RAX_MixSample(int16* left, int16* right);
 #else
 namespace MDFN_IEN_SSFPLAY
 {
@@ -58,6 +61,7 @@ static MDFN_jmp_buf jbuf;
 static int16 IBuffer[1024][2];
 static uint32 IBufferCount;
 static int last_rate;
+static bool rax_active = false;
 
 static INLINE void SCSP_SoundIntChanged(SS_SCSP* s, unsigned level)
 {
@@ -226,6 +230,11 @@ void SOUND_Set68KActive(bool active)
  SoundCPU.SetExtHalted(!active);
 }
 
+void SOUND_SetRAXActive(bool active)
+{
+ rax_active = active;
+}
+
 uint16 SOUND_Read16(uint32 A)
 {
  uint16 ret;
@@ -256,6 +265,18 @@ static NO_INLINE void RunSCSP(void)
  //bp[1] = rand();
  bp[0] = (bp[0] * 27 + 16) >> 5;
  bp[1] = (bp[1] * 27 + 16) >> 5;
+
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(MDFN_UNLIKELY(rax_active))
+ {
+  int16 rl = 0, rr = 0;
+  RAX_MixSample(&rl, &rr);
+  int32 ml = (int32)bp[0] + rl;
+  int32 mr = (int32)bp[1] + rr;
+  bp[0] = (ml < -32768) ? -32768 : (ml > 32767) ? 32767 : (int16)ml;
+  bp[1] = (mr < -32768) ? -32768 : (mr > 32767) ? 32767 : (int16)mr;
+ }
+#endif
 
 /*
  // TODO?  Need to measure frequency response more reliably first, ideally after capacitor

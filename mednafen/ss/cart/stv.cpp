@@ -23,8 +23,10 @@
 #include "common.h"
 #include "stv.h"
 #include "../db.h"
+#include "../sound.h"
 #include "chip315_5838.h"
 #include "chip315_5881.h"
+#include "acclaim_rax.h"
 
 #include <mednafen/hash/sha256.h>
 #include <mednafen/Time.h>
@@ -33,6 +35,7 @@ namespace MDFN_IEN_SS
 {
 
 static unsigned ECChip;
+static bool HasRAX;
 
 static uint16* ROM;
 #ifdef MDFN_ENABLE_DEV_BUILD
@@ -101,6 +104,37 @@ uint8 CART_STV_PeekROM(uint32 A)
  assert(A < 0x3000000);
 
  return ne16_rbo_be<uint8>(ROM, A);
+}
+
+/* RAX read handler — SH-2 reads ADSP status/response from 0x04000000.
+ * Offset 0 (A&2==0): status word (bit 0 = adsp_snd_pf0: 1=ADSP idle/ready)
+ * Offset 2 (A&2==2): data_out_latch (ADSP → SH-2 response) */
+static MDFN_HOT void RAX_Read16_STV(uint32 A, uint16* DB)
+{
+ RAX_Read16(A, DB);
+}
+
+/* RAX write handler — both SH-2 master and slave write here.
+ * MAME batmanfr_sound_comms_w: only upper 16 bits carry sound data.
+ * The 32-bit word arrives as two 16-bit writes; the first (high word at
+ * offset 0) carries the command, the second (low word at offset 2) is
+ * ignored per MAME's FIXME comment. */
+static MDFN_HOT void RAX_Write16(uint32 A, uint16* DB)
+{
+ static uint32_t rax_wr_cnt = 0;
+ rax_wr_cnt++;
+ if((A & 2) == 0) {
+  fprintf(stderr, "[STV] RAX cmd #%u A=%08X val=%04X\n", rax_wr_cnt, (unsigned)A, (unsigned)*DB);
+  RAX_WriteCommand(*DB);
+ }
+}
+
+static MDFN_HOT void RAX_Write8(uint32 A, uint16* DB)
+{
+ /* byte writes map to the high or low byte of the 16-bit word;
+  * treat any byte write to the high-address word as a command */
+ if((A & 2) == 0)
+  RAX_WriteCommand(*DB);
 }
 
 template<typename T>
@@ -242,6 +276,8 @@ static void Reset(bool powering_up)
   chip5838.reset();
  if(ECChip == STV_EC_CHIP_315_5881)
   chip5881.reset();
+ if(HasRAX)
+  RAX_Reset();
 }
 
 static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
@@ -284,6 +320,9 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
 
  MDFNSS_StateAction(sm, load, data_only, StateRegs, "STV_CART");
 
+ if(HasRAX)
+  RAX_StateAction(sm, load, data_only);
+
  if(load)
  {
 
@@ -292,6 +331,9 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
 
 static void Kill(void)
 {
+ if(HasRAX)
+  RAX_Kill();
+
  if(ROM)
  {
   delete[] ROM;
@@ -341,6 +383,7 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
   sha256_hasher h;
 
   ECChip = sgi->ec_chip;
+  HasRAX = sgi->has_rax;
   c->is_stv = true;
 
   ROM = new uint16[0x3000000 / sizeof(uint16)];
@@ -501,6 +544,17 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
     * game_key is fixed per-game; subkey comes from the game at runtime. */
    chip5881.game_key = sgi->ec_key;
    MDFN_printf(_("[CART-STV] 315-5881 encryption chip enabled (key=0x%08X)\n"), sgi->ec_key);
+  }
+
+  /* Acclaim RAX sound board (Batman Forever):
+   * SH-2 writes commands to 0x04800000; reads status from same range.
+   * Both master and slave SH-2 write here. */
+  if(HasRAX)
+  {
+   c->CS01_SetRW8W16(0x04800000, 0x048FFFFF, RAX_Read16_STV, RAX_Write8, RAX_Write16);
+   RAX_Init(gf->vfs, gf->dir);
+   SOUND_SetRAXActive(true);
+   MDFN_printf(_("[CART-STV] Acclaim RAX sound board enabled\n"));
   }
 
   c->StateAction = StateAction;
