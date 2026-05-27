@@ -26,6 +26,18 @@ The core supports all **70 ST-V titles** in the database (64 from Mednafen 1.32.
 
 The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank selection matches MAME's `decathlt_prot_srcaddr_w` (SH-2 address bits [24:23] → 8 MB bank window).
 
+### Touchscreen — Critter Crusher
+
+Critter Crusher uses a resistive touchscreen panel wired to the JAMMA I/O connector. The hardware reports a touched position as a 6-bit X (0–62) and 6-bit Y (0–46) grid, with a hit-bit in the I/O register.
+
+| Game | Status |
+|------|--------|
+| Critter Crusher | Working |
+
+The frontend's pointer device (`RETRO_DEVICE_POINTER`) is used for input — this covers mouse on desktop, touchscreen on mobile/Android, and light-gun mappings. A crosshair overlay can be shown and coloured via core options (see [Input options](#input)).
+
+---
+
 ### Acclaim RAX sound board — Batman Forever
 
 Batman Forever uses an external audio expansion board (**Acclaim RAX**) plugged into the ST-V cartridge slot. The RAX contains an **ADSP-2181 DSP**, four 2 MB sample ROMs, and a 512 KB program ROM. The DSP runs a custom firmware that handles sound commands from the SH-2, mixes PCM voices, and streams audio via the SPORT0 serial port.
@@ -64,6 +76,8 @@ Save states and RetroArch rewind are fully supported. The state size is computed
 
 ## Input mapping
 
+### Gamepad (3-button / 6-button games)
+
 Action buttons are mapped ergonomically to face buttons:
 
 | RetroArch button | 3-button games | 6-button games |
@@ -86,6 +100,20 @@ Coin insertion uses edge detection (one press = one coin).
 
 Tate (vertical cabinet) games are detected automatically from the game database and reported to the frontend via `SET_ROTATION` — no manual option required.
 
+### Touchscreen (Critter Crusher)
+
+Critter Crusher is controlled entirely via `RETRO_DEVICE_POINTER`:
+
+| Input | Action |
+|-------|--------|
+| Pointer move | Move cursor over target |
+| Pointer press / click | Hit |
+| **Select** | **Insert Coin** |
+| **L3** | **Test Button** |
+| **R3** | **Service Button** |
+
+Works with mouse (desktop), touchscreen (Android / mobile), or any pointer device the frontend exposes. An optional crosshair overlay shows the current pointer position (see [Input options](#input)).
+
 ---
 
 ## Core options
@@ -98,6 +126,13 @@ Tate (vertical cabinet) games are detected automatically from the game database 
 | `mednafen_stv_cart` | `auto` | Expansion cart: Auto / None / Backup RAM / 4M RAM / 8M RAM |
 | `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation. Restart required. |
 | `mednafen_stv_autortc` | `enabled` | Auto-set Real Time Clock from host |
+
+### Input
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mednafen_stv_crosshair` | `enabled` | Show crosshair overlay for touchscreen games (Critter Crusher) |
+| `mednafen_stv_crosshair_color` | `white` | Crosshair colour: White / Red / Green / Blue / Yellow / Cyan |
 
 ### Video
 
