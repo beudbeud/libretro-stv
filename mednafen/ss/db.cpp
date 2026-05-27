@@ -1602,6 +1602,26 @@ static const STVGameInfo STVGI[] =
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr-21444.ic8" },
   }
  },
+
+ {
+  "Final Fight Revenge (V1.000)",
+  SMPC_AREA_JP,
+  STV_CONTROL_6B,
+  STV_EC_CHIP_315_5881,
+   0x0524AC01,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   /* No IC13: program ROM opr21872.7 starts at 0x200000 (no-IC13 board type). */
+   { 0x0200000, 0x0200000, STV_MAP_16LE, "opr21872.7" },
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr21873.2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr21874.3" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr21875.4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr21876.5" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr21877.6" },
+   { 0x1800000, 0x0200000, STV_MAP_16LE, "opr21878.1" },
+  }
+ },
 };
 
 const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
