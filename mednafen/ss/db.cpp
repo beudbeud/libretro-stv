@@ -257,6 +257,26 @@ static const STVGameInfo STVGI[] =
  },
 
  {
+  "Wanpaku Safari",
+  SMPC_AREA_JP,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   /* No IC13: program ROM is on a different board type, ROMs start at 0x200000.
+    * head_crc32=0 is safe here — Choro Q (same ic22.bin name) uses 0x4F4D6229
+    * as its discriminator and appears earlier in STVGI[]. */
+   { 0x0200000, 0x0200000, STV_MAP_16LE, "ic22.bin" },
+   { 0x0400000, 0x0200000, STV_MAP_16LE, "ic24.bin" },
+   { 0x0600000, 0x0200000, STV_MAP_16LE, "ic26.bin" },
+   { 0x0800000, 0x0200000, STV_MAP_16LE, "ic28.bin" },
+   { 0x0A00000, 0x0200000, STV_MAP_16LE, "ic30.bin" },
+  }
+ },
+
+ {
   "Columns '97",
   SMPC_AREA_JP,
   STV_CONTROL_3B,
