@@ -271,8 +271,9 @@ static NO_INLINE void RunSCSP(void)
  {
   int16 rl = 0, rr = 0;
   RAX_MixSample(&rl, &rr);
-  int32 ml = (int32)bp[0] + rl;
-  int32 mr = (int32)bp[1] + rr;
+  // RAX firmware output is low amplitude; boost to match SCSP levels
+  int32 ml = (int32)bp[0] + (rl * 3);
+  int32 mr = (int32)bp[1] + (rr * 3);
   bp[0] = (ml < -32768) ? -32768 : (ml > 32767) ? 32767 : (int16)ml;
   bp[1] = (mr < -32768) ? -32768 : (mr > 32767) ? 32767 : (int16)mr;
  }
