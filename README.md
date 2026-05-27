@@ -25,9 +25,20 @@ The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, includ
 
 The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank selection matches MAME's `decathlt_prot_srcaddr_w` (SH-2 address bits [24:23] → 8 MB bank window).
 
-### Batman Forever
+### Acclaim RAX sound board — Batman Forever
 
-> **Status**: No sound (requires Acclaim's RAX soundboard, an external audio expansion not emulated).
+Batman Forever uses an external audio expansion board (**Acclaim RAX**) plugged into the ST-V cartridge slot. The RAX contains an **ADSP-2181 DSP**, four 2 MB sample ROMs, and a 512 KB program ROM. The DSP runs a custom firmware that handles sound commands from the SH-2, mixes PCM voices, and streams audio via the SPORT0 serial port.
+
+| Game | Status |
+|------|--------|
+| Batman Forever | Working (full audio) |
+
+**Implementation notes:**
+
+- Standalone ADSP-2181 CPU emulator adapted from MAME's `adsp2100.cpp` (Aaron Giles, BSD-3-Clause).
+- BDMA transfers load firmware segments into DSP program memory; the synthesis engine arms itself via a PM[0x001C] hook patched each BDMA cycle.
+- The BDMA IRQ is pulsed (assert + deassert in one step) to mimic MAME's `pulse_input_line`, ensuring a fresh rising edge for every transfer — matching the hardware's edge-triggered latch behaviour.
+- Audio is sampled at 44 100 Hz (378 DSP cycles/sample) and mixed into the libretro audio ring buffer via the SPORT0-TX autobuffer mechanism.
 
 ---
 
@@ -80,18 +91,17 @@ Tate (vertical cabinet) games are detected automatically from the game database 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `mednafen_stv_region` | `auto` | BIOS region: Auto / Japan / North America / Europe |
-| `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation |
+| `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation. Restart required. |
 | `mednafen_stv_h_overscan` | `enabled` | Show horizontal overscan pixels |
 | `mednafen_stv_h_blend` | `disabled` | Horizontal blend filter (anti-dithering) |
 | `mednafen_stv_correct_aspect` | `enabled` | Correct pixel aspect ratio |
-| `mednafen_stv_mesh_transparency` | `disabled` | Improved mesh transparency (CPU-side, ported from Kronos) |
-| `mednafen_stv_deinterlacer` | `disabled` | 480i deinterlacer: disabled / bob (renderer) / bob (SW) |
-| `mednafen_stv_vdp1_instant` | `disabled` | VDP1INSTANT: reduces frame lag and eliminates stripe artifacts |
+| `mednafen_stv_mesh_transparency` | `disabled` | Replace VDP1 stipple (checkerboard) with 50% blend for smoke/shadow/fade effects. 16-bit framebuffer only. |
+| `mednafen_stv_deinterlacer` | `blend` | 480i handling: Blend (smooth, recommended) / Off (renderer bob) / Weave / Bob / Bob with offset / Blend gamma-correct |
 | `mednafen_stv_frameskip` | `disabled` | Frameskip: disabled / auto / 1–5 |
-| `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0–239) |
-| `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (0–239) |
+| `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0 / 2 / 4 / 8) |
+| `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
 | `mednafen_stv_cart` | `auto` | Expansion cart: Auto / None / Backup RAM / 4M RAM / 8M RAM |
-| `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: Fast (recommended) / Data cache only / Full (accurate, slow). Restart required. |
+| `mednafen_stv_cpu_cache` | `fast` | SH-2 cache emulation: Fast (recommended) / Data cache only / Full (accurate, slow). Restart required. |
 | `mednafen_stv_bios_sanity` | `enabled` | Verify BIOS SHA-256 checksums at load |
 | `mednafen_stv_autortc` | `enabled` | Auto-set Real Time Clock from host |
 | `mednafen_stv_autortc_lang` | `english` | BIOS language (English / Japanese / French / German / Spanish / Italian) |
@@ -131,5 +141,6 @@ make -f libretro/Makefile.libretro platform=android_arm64
 - **Mednafen Team** — SS/ST-V emulation core
 - **Andreas Naive, Olivier Galibert, David Haywood** — 315-5881 cipher research (MAME)
 - **David Haywood, Samuel Neves, Peter Wilhelmsen, Morten Shearman Kirkegaard** — 315-5838 decompressor (MAME)
+- **Aaron Giles** — ADSP-2181 CPU core (MAME `adsp2100.cpp`, BSD-3-Clause)
 - **Beetle Saturn authors** — libretro wrapper reference
 - **Beetle PCE Fast authors** — geometry / input reference

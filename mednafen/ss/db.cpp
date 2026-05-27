@@ -211,7 +211,7 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken, needs extra sound board emulation
+ /* Batman Forever — Acclaim RAX sound board (ADSP-2181 HLE) */
  {
   "Batman Forever",
   SMPC_AREA_JP,
@@ -231,7 +231,8 @@ static const STVGameInfo STVGI[] =
    { 0x1400000, 0x0400000, STV_MAP_16LE, "gfx4.u12" },
    { 0x1800000, 0x0400000, STV_MAP_16LE, "gfx5.u15" },
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "gfx6.u18" },
-  }
+  },
+  true, /* has_rax */
  },
 
  // Broken
@@ -252,6 +253,26 @@ static const STVGameInfo STVGI[] =
    { 0x0C00000, 0x0200000, STV_MAP_16LE, "ic32.bin" },
    { 0x0E00000, 0x0200000, STV_MAP_16LE, "ic34.bin" },
    { 0x1000000, 0x0200000, STV_MAP_16LE, "ic36.bin" },
+  }
+ },
+
+ {
+  "Wanpaku Safari",
+  SMPC_AREA_JP,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   /* No IC13: program ROM is on a different board type, ROMs start at 0x200000.
+    * head_crc32=0 is safe here — Choro Q (same ic22.bin name) uses 0x4F4D6229
+    * as its discriminator and appears earlier in STVGI[]. */
+   { 0x0200000, 0x0200000, STV_MAP_16LE, "ic22.bin" },
+   { 0x0400000, 0x0200000, STV_MAP_16LE, "ic24.bin" },
+   { 0x0600000, 0x0200000, STV_MAP_16LE, "ic26.bin" },
+   { 0x0800000, 0x0200000, STV_MAP_16LE, "ic28.bin" },
+   { 0x0A00000, 0x0200000, STV_MAP_16LE, "ic30.bin" },
   }
  },
 
@@ -391,7 +412,6 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken
  {
   "Dancing Fever Gold",
   SMPC_AREA_JP,
@@ -401,29 +421,19 @@ static const STVGameInfo STVGI[] =
   STV_ROMTWIDDLE_NONE,
   false,
   {
+   /* ROM layout from MAME dfeverg: single IC13 program ROM at offset 0,
+    * data ROMs 1-6 at 0x400000-0x1800000, then 8-11 (no "7", no "12" — NO_DUMP). */
    { 0x0000000, 0x0080000, STV_MAP_16LE, "13" },
-   { 0x0080000, 0x0080000, STV_MAP_16LE, "13" },
-   { 0x0100000, 0x0080000, STV_MAP_16LE, "13" },
-#if 1
-   { 0x0400000, 0x0400000, STV_MAP_16LE, "2" },
-   { 0x0800000, 0x0400000, STV_MAP_16LE, "3" },
-   { 0x0C00000, 0x0400000, STV_MAP_16LE, "4" },
-   { 0x1000000, 0x0400000, STV_MAP_16LE, "5" },
-   { 0x1400000, 0x0400000, STV_MAP_16LE, "6" },
-   { 0x1800000, 0x0400000, STV_MAP_16LE, "1" },
-#else
    { 0x0400000, 0x0400000, STV_MAP_16LE, "1" },
    { 0x0800000, 0x0400000, STV_MAP_16LE, "2" },
    { 0x0C00000, 0x0400000, STV_MAP_16LE, "3" },
    { 0x1000000, 0x0400000, STV_MAP_16LE, "4" },
    { 0x1400000, 0x0400000, STV_MAP_16LE, "5" },
    { 0x1800000, 0x0400000, STV_MAP_16LE, "6" },
-#endif
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "8" },
    { 0x2000000, 0x0400000, STV_MAP_16LE, "9" },
    { 0x2400000, 0x0400000, STV_MAP_16LE, "10" },
    { 0x2800000, 0x0400000, STV_MAP_16LE, "11" },
-   { 0x2C00000, 0x0400000, STV_MAP_16LE, "12" },
   }
  },
 
@@ -1546,6 +1556,70 @@ static const STVGameInfo STVGI[] =
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr20405.8" },
    { 0x2000000, 0x0400000, STV_MAP_16LE, "mpr20406.9" },
    { 0x2400000, 0x0400000, STV_MAP_16LE, "mpr20407.10" },
+  }
+ },
+ {
+  "All Japan Pro-Wrestling Featuring Virtua (Taiwan)",
+  SMPC_AREA_ASIA_NTSC,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr20408.13" },
+   { 0x0200000, 0x0100000, STV_MAP_16BE,  "epr20408.13" },  /* ROM_RELOAD_PLAIN */
+   { 0x0300000, 0x0100000, STV_MAP_16BE,  "epr20408.13" },  /* ROM_RELOAD_PLAIN */
+
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20400.2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20401.3" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr20402.4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr20403.5" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr20404.6" },
+   { 0x1800000, 0x0400000, STV_MAP_16LE, "mpr20399.1" },
+   { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr20405.8" },
+   { 0x2000000, 0x0400000, STV_MAP_16LE, "mpr20406.9" },
+   { 0x2400000, 0x0400000, STV_MAP_16LE, "mpr20407.10" },
+  }
+ },
+
+ {
+  "Fantasy Zone (medal game)",
+  SMPC_AREA_JP,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000000, 0x0080000, STV_MAP_16LE, "epr-21440a.ic13" },
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr-21441.ic2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr-21445.ic1" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr-21442.ic4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr-21446.ic3" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr-21443.ic6" },
+   { 0x1800000, 0x0400000, STV_MAP_16LE, "mpr-21447.ic5" },
+   { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr-21444.ic8" },
+  }
+ },
+
+ {
+  "Final Fight Revenge (V1.000)",
+  SMPC_AREA_JP,
+  STV_CONTROL_6B,
+  STV_EC_CHIP_315_5881,
+   0x0524AC01,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   /* No IC13: program ROM opr21872.7 starts at 0x200000 (no-IC13 board type). */
+   { 0x0200000, 0x0200000, STV_MAP_16LE, "opr21872.7" },
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr21873.2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr21874.3" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr21875.4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr21876.5" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr21877.6" },
+   { 0x1800000, 0x0200000, STV_MAP_16LE, "opr21878.1" },
   }
  },
 };

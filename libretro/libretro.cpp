@@ -483,9 +483,10 @@ RETRO_API void retro_init(void)
     MDFNI_SetSetting("filesys.path_firmware", sys_dir.c_str());
 
     // BIOS filenames — mednafen builds: sys_dir + "/" + filename
-    MDFNI_SetSetting("ss.bios_stv_jp",  "epr-20091.ic8");   // ST-V Japan
-    MDFNI_SetSetting("ss.bios_stv_na",  "epr-17952a.ic8");  // ST-V North America
-    MDFNI_SetSetting("ss.bios_stv_eu",  "epr-17954a.ic8");  // ST-V Europe
+    MDFNI_SetSetting("ss.bios_stv_jp",   "epr-20091.ic8");   // ST-V Japan
+    MDFNI_SetSetting("ss.bios_stv_asia", "epr-19854.ic8");   // ST-V Asia/Taiwan
+    MDFNI_SetSetting("ss.bios_stv_na",   "epr-17952a.ic8");  // ST-V North America
+    MDFNI_SetSetting("ss.bios_stv_eu",   "epr-17954a.ic8");  // ST-V Europe
     MDFNI_SetSetting("ss.bios_jp",      "sega_101.bin");    // Saturn Japan (unused for ST-V)
     MDFNI_SetSetting("ss.bios_na_eu",   "mpr-17933.bin");   // Saturn NA/EU (unused for ST-V)
 
