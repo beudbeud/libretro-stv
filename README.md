@@ -25,9 +25,20 @@ The core supports all **64 ST-V titles** in the Mednafen 1.32.1 database, includ
 
 The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank selection matches MAME's `decathlt_prot_srcaddr_w` (SH-2 address bits [24:23] → 8 MB bank window).
 
-### Batman Forever
+### Acclaim RAX sound board — Batman Forever
 
-> **Status**: No sound (requires Acclaim's RAX soundboard, an external audio expansion not emulated).
+Batman Forever uses an external audio expansion board (**Acclaim RAX**) plugged into the ST-V cartridge slot. The RAX contains an **ADSP-2181 DSP**, four 2 MB sample ROMs, and a 512 KB program ROM. The DSP runs a custom firmware that handles sound commands from the SH-2, mixes PCM voices, and streams audio via the SPORT0 serial port.
+
+| Game | Status |
+|------|--------|
+| Batman Forever | Working (full audio) |
+
+**Implementation notes:**
+
+- Standalone ADSP-2181 CPU emulator adapted from MAME's `adsp2100.cpp` (Aaron Giles, BSD-3-Clause).
+- BDMA transfers load firmware segments into DSP program memory; the synthesis engine arms itself via a PM[0x001C] hook patched each BDMA cycle.
+- The BDMA IRQ is pulsed (assert + deassert in one step) to mimic MAME's `pulse_input_line`, ensuring a fresh rising edge for every transfer — matching the hardware's edge-triggered latch behaviour.
+- Audio is sampled at 44 100 Hz (378 DSP cycles/sample) and mixed into the libretro audio ring buffer via the SPORT0-TX autobuffer mechanism.
 
 ---
 
@@ -130,5 +141,6 @@ make -f libretro/Makefile.libretro platform=android_arm64
 - **Mednafen Team** — SS/ST-V emulation core
 - **Andreas Naive, Olivier Galibert, David Haywood** — 315-5881 cipher research (MAME)
 - **David Haywood, Samuel Neves, Peter Wilhelmsen, Morten Shearman Kirkegaard** — 315-5838 decompressor (MAME)
+- **Aaron Giles** — ADSP-2181 CPU core (MAME `adsp2100.cpp`, BSD-3-Clause)
 - **Beetle Saturn authors** — libretro wrapper reference
 - **Beetle PCE Fast authors** — geometry / input reference
