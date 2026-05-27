@@ -449,10 +449,9 @@ void RAX_WriteCommand(uint16 data)
 
 void RAX_MixSample(int16* left, int16* right)
 {
- /* Pulse SPORT0_TX to produce a rising edge each sample period.
-  * The firmware ISR at 0x0010 runs a DO UNTIL loop and, when synthesis is
-  * active, jumps via PM[0x001C] to the synthesis routine at 0x26BA. */
- ADSP2181_SetIRQ(&rax_cpu, ADSP2181_SPORT0_TX, 0);
+ /* Pulse SPORT0_TX each sample period.  SPORT0_TX uses edge-triggered
+  * latching: SetIRQ(1) always sets the latch, so no prior deassert needed.
+  * The ISR at 0x0010 jumps via PM[0x001C] to the synthesis mixer (0x26BA). */
  ADSP2181_SetIRQ(&rax_cpu, ADSP2181_SPORT0_TX, 1);
  ADSP2181_Run(&rax_cpu, ADSP_CYCLES_PER_SAMPLE);
 
@@ -474,13 +473,9 @@ void RAX_MixSample(int16* left, int16* right)
    else if(addr >= base + (uint32_t)len) addr -= (uint32_t)len;
    return addr;
   };
-  uint32_t il = i & 0x3FFF;
-  *left  = (il >= 0x2000 && il < 0x3FE0)
-           ? (int16_t)rax_cpu.dm_upper[il - 0x2000] : 0;
+  *left  = (int16_t)dm_read_addr(i);
   i = circ_adv(i);
-  uint32_t ir = i & 0x3FFF;
-  *right = (ir >= 0x2000 && ir < 0x3FE0)
-           ? (int16_t)rax_cpu.dm_upper[ir - 0x2000] : 0;
+  *right = (int16_t)dm_read_addr(i);
   i = circ_adv(i);
   rax_cpu.i[ab_ireg] = i;
  }

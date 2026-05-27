@@ -237,16 +237,16 @@ static void update_l(ADSP2181 *cpu, int which);
 static inline uint16_t data_read(ADSP2181 *cpu, uint32_t addr)
 {
     addr &= 0x3fff;
-    if (addr < 0x2000)  return cpu->dm_active_bank[addr];
-    if (addr < 0x3fe0)  return cpu->dm_upper[addr - 0x2000];
+    if (__builtin_expect(addr < 0x2000, 1))  return cpu->dm_active_bank[addr];
+    if (__builtin_expect(addr < 0x3fe0, 1))  return cpu->dm_upper[addr - 0x2000];
     return cpu->io_read_cb ? cpu->io_read_cb(cpu, 0x800u + (addr & 0x1f)) : 0xffff;
 }
 
 static inline void data_write(ADSP2181 *cpu, uint32_t addr, uint16_t data)
 {
     addr &= 0x3fff;
-    if (addr < 0x2000)  { cpu->dm_active_bank[addr] = data; return; }
-    if (addr < 0x3fe0)  { cpu->dm_upper[addr - 0x2000] = data; return; }
+    if (__builtin_expect(addr < 0x2000, 1))  { cpu->dm_active_bank[addr] = data; return; }
+    if (__builtin_expect(addr < 0x3fe0, 1))  { cpu->dm_upper[addr - 0x2000] = data; return; }
     if (cpu->io_write_cb)
         cpu->io_write_cb(cpu, 0x800u + (addr & 0x1f), data);
 }
