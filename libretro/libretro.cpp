@@ -29,6 +29,7 @@
 #include "ss/vdp1.h"
 #include "ss/vdp1_common.h"
 #include "ss/vdp2.h"
+#include "ss/stvio.h"
 
 using namespace Mednafen;
 
@@ -63,8 +64,13 @@ static constexpr int AUDIO_MAX = 44100;  /* 1s @ 44100Hz, mednafen needs >= 500m
 static int16_t audio_buf[AUDIO_MAX * 2];
 
 
-static uint8_t pad_data[2][32] = {};
-static uint8_t *port_ptr[2]    = {};
+static uint8_t *port_ptr[2] = {};
+
+/* ── Hammer (touchscreen) input — Critter Crusher ──────────────────────────── */
+static bool g_is_hammer = false;
+/* gun buffer layout: [nom_x lo, nom_x hi, nom_y lo, nom_y hi, buttons]
+ * nom_x ∈ [0, mouse_scale_x ≈ 21472], nom_y ∈ [mouse_offs_y, mouse_offs_y+mouse_scale_y]
+ * RETRO_DEVICE_POINTER [-32768,32767] → this space via (ptr+32768)*scale/65536+offs */
 
 static std::string sys_dir, save_dir;
 
@@ -209,23 +215,44 @@ static void update_input()
     if(!input_poll_cb || !input_state_cb) return;
     input_poll_cb();
 
-    /* ── Player gamepad inputs ── */
-    for(int p = 0; p < 2; p++) {
-        if(!port_ptr[p]) continue;
+    /* ── Player inputs ── */
+    if(g_is_hammer) {
+        /* Critter Crusher: touchscreen via RETRO_DEVICE_POINTER.
+         * Convert pointer [-32768,32767] to mednafen gun buffer space:
+         *   nom_x = (ptr_x + 32768) * mouse_scale_x / 65536 + mouse_offs_x
+         *   nom_y = (ptr_y + 32768) * mouse_scale_y / 65536 + mouse_offs_y
+         * STVIO then maps nom_x → x∈[0,62], nom_y → y∈[0,46] for the grid. */
+        if(port_ptr[0]) {
+            /* game_info is always non-null here (retro_run() guards before calling update_input) */
+            const int16_t ptr_x = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+            const int16_t ptr_y = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+            const bool pressed  = (bool)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
 
-        uint16_t bits = 0;
-        for(auto &m : s_pad_map)
-            if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
-                bits |= (1u << m.bit);
+            const int16_t nom_x = (int16_t)((float)((int32_t)ptr_x + 32768) * game_info->mouse_scale_x / 65536.0f + game_info->mouse_offs_x);
+            const int16_t nom_y = (int16_t)((float)((int32_t)ptr_y + 32768) * game_info->mouse_scale_y / 65536.0f + game_info->mouse_offs_y);
 
-        /* No simultaneous opposite directions */
-        if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
-            bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
-        if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
-            bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+            MDFN_en16lsb(port_ptr[0] + 0, (uint16_t)nom_x);
+            MDFN_en16lsb(port_ptr[0] + 2, (uint16_t)nom_y);
+            port_ptr[0][4] = pressed ? 0x01 : 0x00;
+        }
+    } else {
+        for(int p = 0; p < 2; p++) {
+            if(!port_ptr[p]) continue;
 
-        port_ptr[p][0] = (uint8_t)(bits & 0xFF);
-        port_ptr[p][1] = (uint8_t)(bits >> 8);
+            uint16_t bits = 0;
+            for(auto &m : s_pad_map)
+                if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
+                    bits |= (1u << m.bit);
+
+            /* No simultaneous opposite directions */
+            if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
+                bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
+            if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
+                bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+
+            port_ptr[p][0] = (uint8_t)(bits & 0xFF);
+            port_ptr[p][1] = (uint8_t)(bits >> 8);
+        }
     }
 
     /* ── ST-V Builtin port 12 (Test / Service / Pause / Coin) ──
@@ -272,6 +299,7 @@ static void update_input()
 
 static retro_core_option_v2_category s_cats[] = {
     { "system",      "System",      NULL },
+    { "input",       "Input",       NULL },
     { "video",       "Video",       NULL },
     { "performance", "Performance", NULL },
     { NULL, NULL, NULL }
@@ -288,6 +316,13 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_autortc", "Auto-set RTC", NULL, NULL, NULL, "system",
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    /* ── Input ── */
+    { "mednafen_stv_crosshair", "Touchscreen Crosshair", NULL,
+      "Show a crosshair cursor for touchscreen games (Critter Crusher).", NULL, "input",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair_color", "Touchscreen Crosshair Color", NULL,
+      "Color of the touchscreen crosshair.", NULL, "input",
+      { {"white","White"},{"red","Red"},{"green","Green"},{"blue","Blue"},{"yellow","Yellow"},{"cyan","Cyan"},{NULL,NULL} }, "white" },
 
     /* ── Video ── */
     { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
@@ -329,6 +364,10 @@ static retro_core_option_definition s_opts_v1[] = {
       NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_autortc",          "Auto-set RTC",
       NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair",        "Touchscreen Crosshair",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair_color",  "Touchscreen Crosshair Color",
+      NULL, { {"white","White"},{"red","Red"},{"green","Green"},{"blue","Blue"},{"yellow","Yellow"},{"cyan","Cyan"},{NULL,NULL} }, "white" },
     { "mednafen_stv_correct_aspect",   "Correct Aspect Ratio",
       NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_overscan",       "Show Horizontal Overscan",
@@ -398,6 +437,32 @@ STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         MDFN_IEN_SS::VDP1::SetMeshImproved(strcmp(var.value, "enabled") == 0);
 
+    /* Touchscreen crosshair. STVIO_SetCrosshairsColor is a no-op for non-HAMMER games.
+     * color > 0xFFFFFF disables drawing (chair_draw = color <= 0xFFFFFF in gun.cpp). */
+    {
+        bool crosshair_on = true;
+        var.key = "mednafen_stv_crosshair";
+        if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+            crosshair_on = strcmp(var.value, "disabled") != 0;
+
+        uint32_t color = 0xFFFFFFFFu; /* hidden */
+        if(crosshair_on) {
+            static const struct { const char *name; uint32_t rgb; } s_colors[] = {
+                { "white",  0xFFFFFFu }, { "red",    0xFF0000u },
+                { "green",  0x00FF00u }, { "blue",   0x0000FFu },
+                { "yellow", 0xFFFF00u }, { "cyan",   0x00FFFFu },
+            };
+            color = 0xFFFFFFu; /* white default */
+            var.key = "mednafen_stv_crosshair_color";
+            if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                for(const auto &e : s_colors) {
+                    if(!strcmp(var.value, e.name)) { color = e.rgb; break; }
+                }
+            }
+        }
+        MDFN_IEN_SS::STVIO_SetCrosshairsColor(0, color);
+    }
+
     var.key = "mednafen_stv_frameskip";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         if(strcmp(var.value, "auto") == 0) {
@@ -461,6 +526,8 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
             {"mednafen_stv_cart",             "Expansion Cart; auto|none|backup|4mram|8mram"},
             {"mednafen_stv_skip_bios",        "Skip BIOS; disabled|enabled"},
             {"mednafen_stv_autortc",          "Auto-set RTC; enabled|disabled"},
+            {"mednafen_stv_crosshair",        "Touchscreen Crosshair; enabled|disabled"},
+            {"mednafen_stv_crosshair_color",  "Touchscreen Crosshair Color; white|red|green|blue|yellow|cyan"},
             {"mednafen_stv_correct_aspect",   "Correct Aspect Ratio; enabled|disabled"},
             {"mednafen_stv_h_overscan",       "Show Horizontal Overscan; enabled|disabled"},
             {"mednafen_stv_h_blend",          "Horizontal Blend Filter; disabled|enabled"},
@@ -619,6 +686,13 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         }
     }
 
+    /* Detect Hammer (touchscreen) games — ss.cpp pushes "gun" as first
+     * DesiredInput entry for STV_CONTROL_HAMMER titles (Critter Crusher). */
+    g_is_hammer = !game_info->DesiredInput.empty()
+               && game_info->DesiredInput[0].device_name
+               && strcmp(game_info->DesiredInput[0].device_name, "gun") == 0;
+    lr_log(RETRO_LOG_INFO, "Input scheme: %s\n", g_is_hammer ? "hammer/touchscreen" : "gamepad");
+
     /* Initialize ALL ports declared by the SS module (0..N-1).
      * ST-V has 13 ports (port12 = "builtin"). Without initializing all
      * of them, DPtr[12] stays nullptr → STVIO_TransformInput() crashes
@@ -627,14 +701,23 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         int nports = (int)game_info->PortInfo.size();
         lr_log(RETRO_LOG_INFO, "SS module has %d input ports\n", nports);
         for(int p = 0; p < nports; p++) {
-            /* type 0 = first/default device for this port */
             MDFNI_SetInput(p, 0);
         }
-        /* Gamepad for players 0 and 1 (type 1 = gamepad) */
-        for(int p = 0; p < 2; p++) {
-            port_ptr[p] = MDFNI_SetInput(p, 1);
-            if(port_ptr[p]) memset(port_ptr[p], 0, 2);
+
+        if(g_is_hammer) {
+            /* Gun type = index 7 in InputDeviceInfoSSVPort (smpc.cpp).
+             * STVIO_SetInput only accepts type="gun" for port 0 in HAMMER scheme;
+             * gamepad would be silently nulled, disabling all touchscreen input. */
+            port_ptr[0] = MDFNI_SetInput(0, 7);
+            if(port_ptr[0]) memset(port_ptr[0], 0, 5);
+            port_ptr[1] = nullptr;
+        } else {
+            for(int p = 0; p < 2; p++) {
+                port_ptr[p] = MDFNI_SetInput(p, 1);
+                if(port_ptr[p]) memset(port_ptr[p], 0, 2);
+            }
         }
+
         /* Port 12 = builtin (type 0) — holds STV Test/Service/Pause */
         int builtin_port = nports - 1;
         builtin_ptr = MDFNI_SetInput(builtin_port, 0);
@@ -646,7 +729,18 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
            (double)game_info->fps/(65536.0*256.0));
 
     /* Input descriptors — shown in RetroArch's control remapping UI */
-    {
+    if(g_is_hammer) {
+        static const struct retro_input_descriptor desc_hammer[] = {
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_X,      "Touch X"},
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_Y,      "Touch Y"},
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_PRESSED,"Touch"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_SELECT,  "Insert Coin"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_L3,      "Test Button"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_R3,      "Service Button"},
+            {0,0,0,0,nullptr},
+        };
+        environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_hammer);
+    } else {
         static const struct retro_input_descriptor desc[] = {
             /* Player 1 */
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
@@ -756,6 +850,7 @@ RETRO_API void retro_unload_game(void)
 {
     if(game_info) { MDFNI_CloseGame(); game_info = nullptr; }
     port_ptr[0] = port_ptr[1] = nullptr;
+    g_is_hammer = false;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
     g_bios_state_saved        = false;
