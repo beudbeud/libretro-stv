@@ -69,11 +69,15 @@ static uint8_t *port_ptr[2]    = {};
 static std::string sys_dir, save_dir;
 
 /* ── BIOS Skip ─────────────────────────────────────────────────────────────── */
-static bool        g_stv_skip_bios    = false;
-static bool        g_bios_state_saved = false;
+static bool        g_stv_skip_bios        = false;
+static bool        g_bios_state_saved     = false;
+static bool        g_bios_intback_resaved = false;
 static std::string g_bios_state_path;
-/* Game-start detection: SMPC INTBACK (command 0x10) is how game code polls
- * controllers.  The STV BIOS never issues INTBACK — only game code does. */
+static int         g_bios_total_frames    = 0;
+/* Strategy: save once at BIOS_SKIP_FALLBACK_FRAMES (900 frames / 15 s),
+ * then overwrite once if SMPC INTBACK fires (games that call INTBACK
+ * during attract or first input poll get a fresher game-start state). */
+static const int   BIOS_SKIP_FALLBACK_FRAMES = 1080; /* 18 s at 60 fps */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -537,8 +541,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     apply_options();
 
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
-    g_bios_state_saved      = false;
+    g_bios_state_saved        = false;
+    g_bios_intback_resaved    = false;
     g_bios_state_path.clear();
+    g_bios_total_frames       = 0;
     if(g_stv_skip_bios) {
         char md5_hex[33] = {};
         for(int i = 0; i < 16; i++)
@@ -696,7 +702,8 @@ RETRO_API void retro_unload_game(void)
     port_ptr[0] = port_ptr[1] = nullptr;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
-    g_bios_state_saved      = false;
+    g_bios_state_saved        = false;
+    g_bios_intback_resaved    = false;
     g_bios_state_path.clear();
 }
 
@@ -769,23 +776,31 @@ RETRO_API void retro_run(void)
 
     MDFNI_Emulate(&espec);
 
-    if(g_stv_skip_bios && !g_bios_state_saved && !g_bios_state_path.empty()) {
-        const uint32_t pc = MDFN_IEN_SS::SS_GetMasterPC();
-        const bool in_bios_rom = (pc < 0x00200000u);
+    if(g_stv_skip_bios && !g_bios_state_path.empty()
+       && !(g_bios_state_saved && g_bios_intback_resaved)) {
+        const uint32_t intback = MDFN_IEN_SS::SS_GetINTBACKCount();
 
-        /* Fire as soon as SMPC INTBACK has been called and PC is outside BIOS ROM.
-         * The STV BIOS never calls INTBACK; game code does every frame. */
-        const bool game_running = (MDFN_IEN_SS::SS_GetINTBACKCount() > 0 && !in_bios_rom);
+        g_bios_total_frames++;
 
-        if(game_running) {
+        if(!g_bios_state_saved && g_bios_total_frames >= BIOS_SKIP_FALLBACK_FRAMES) {
             try {
                 Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
                 MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
-                g_bios_state_saved = true;
-                lr_log(RETRO_LOG_INFO, "[skip_bios] state cached: %s\n", g_bios_state_path.c_str());
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state saved (frame %d)\n", g_bios_total_frames);
             } catch(...) {
-                g_bios_state_saved = true;
-                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state: %s\n", g_bios_state_path.c_str());
+                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state\n");
+            }
+            g_bios_state_saved = true;
+        } else if(g_bios_state_saved && !g_bios_intback_resaved && intback > 0) {
+            /* Re-save once on first INTBACK — yields a fresher game-start state
+             * for games that call INTBACK during attract or first input poll. */
+            g_bios_intback_resaved = true;
+            try {
+                Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
+                MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state re-saved on INTBACK (frame %d)\n", g_bios_total_frames);
+            } catch(...) {
+                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to re-save state\n");
             }
         }
     }

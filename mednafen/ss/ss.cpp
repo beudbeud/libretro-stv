@@ -148,6 +148,7 @@ static std::vector<CDInterface*> *cdifs = NULL;
 static std::bitset<1U << (27 - SH7095_EXT_MAP_GRAN_BITS)> FMIsWriteable;
 static uint16 fmap_dummy[(1U << SH7095_EXT_MAP_GRAN_BITS) / sizeof(uint16)];
 
+
 /*
  SH-2 external bus address map:
   CS0: 0x00000000...0x01FFFFFF (16-bit)
