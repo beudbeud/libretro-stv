@@ -97,6 +97,7 @@ struct STVGameInfo
  unsigned romtwiddle;
  bool rotate;
  STVROMLayout rom_layout[16];
+ bool has_rax;        /* Acclaim RAX sound board (Batman Forever) */
 };
 
 const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,

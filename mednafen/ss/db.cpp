@@ -211,7 +211,7 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken, needs extra sound board emulation
+ /* Batman Forever — Acclaim RAX sound board (ADSP-2181 HLE) */
  {
   "Batman Forever",
   SMPC_AREA_JP,
@@ -231,7 +231,8 @@ static const STVGameInfo STVGI[] =
    { 0x1400000, 0x0400000, STV_MAP_16LE, "gfx4.u12" },
    { 0x1800000, 0x0400000, STV_MAP_16LE, "gfx5.u15" },
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "gfx6.u18" },
-  }
+  },
+  true, /* has_rax */
  },
 
  // Broken
