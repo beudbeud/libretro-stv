@@ -144,13 +144,15 @@ void STVIO_UpdateInput(int32 elapsed_time)
     DataIn[i] ^= (((tmp & 0xA0) >> 1) | ((tmp & 0x50) << 1)) | ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
 
     // Batman Forever shifts its 3 buttons to bits 1/2/3 (bit0=unused), so the standard
-    // SW1/SW2/SW3 transform misses Kick (bit3).  For all 3B games add face-button aliases:
-    //   RETRO Y (SAT_X=bit2, Xbox X) → bit2 (Punch)
-    //   RETRO X (SAT_Y=bit1, Xbox Y) → bit3 (Kick)
+    // SW1/SW2/SW3 transform misses Kick (bit3).  For all 3B games:
+    //   - undo SAT_C (RETRO R) → bit2 so no shoulder button leaks in
+    //   - RETRO Y (SAT_X=bit2, Xbox X) → bit2 (Punch)
+    //   - RETRO X (SAT_Y=bit1, Xbox Y) → bit3 (Kick)
     if(ControlScheme == STV_CONTROL_3B)
     {
-     if(tmp & 0x04) DataIn[i] &= ~0x04;  // RETRO Y → bit2
-     if(tmp & 0x02) DataIn[i] &= ~0x08;  // RETRO X → bit3
+     if(tmp & (1u << 9)) DataIn[i] ^= 0x04;  // undo SAT_C XOR on bit2
+     if(tmp & 0x04)      DataIn[i] &= ~0x04;  // RETRO Y → bit2
+     if(tmp & 0x02)      DataIn[i] &= ~0x08;  // RETRO X → bit3
     }
 
     if(ControlScheme == STV_CONTROL_RSG)
