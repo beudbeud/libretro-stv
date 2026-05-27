@@ -41,7 +41,7 @@ uint8 STVIO_ReadIOGA(const sscpu_timestamp_t timestamp, uint8 A) MDFN_HOT;
 void STVIO_TransformInput(void);
 void STVIO_UpdateInput(int32 elapsed_time);
 void STVIO_SetInput(unsigned port, const char* type, uint8* ptr) MDFN_COLD;
-void STVIO_SetInputLayout(bool gamepad_mode) MDFN_COLD;
+
 void STVIO_SetCrosshairsColor(unsigned port, uint32 color) MDFN_COLD;
 
 void STVIO_InsertCoin(void);

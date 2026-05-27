@@ -64,11 +64,7 @@ Save states and RetroArch rewind are fully supported. The state size is computed
 
 ## Input mapping
 
-Two layouts are available via the `mednafen_stv_input_layout` core option.
-
-### Gamepad layout (default)
-
-Ergonomic mapping: the three main action buttons land on face buttons, and the three secondary buttons on Y / L1 / R1.
+Action buttons are mapped ergonomically to face buttons:
 
 | RetroArch button | 3-button games | 6-button games |
 |-----------------|----------------|----------------|
@@ -85,24 +81,6 @@ Ergonomic mapping: the three main action buttons land on face buttons, and the t
 | **R3** (P2) | **Pause Button** | **Pause Button** |
 
 > **Batman Forever** (3-button with non-standard wiring): Jump → B, Punch → A, Kick → Y.
-
-### JAMMA layout
-
-Preserves the original arcade cabinet wiring, identical to Beetle Saturn's Saturn-pad convention.
-
-| RetroArch button | Saturn button | ST-V function |
-|-----------------|---------------|---------------|
-| B | **A** | SW1 |
-| A | **B** | SW2 |
-| R1 | **C** | SW3 |
-| Y | **X** | SW4 |
-| X | **Y** | SW5 |
-| L1 | **Z** | SW6 |
-| Start | Start | Start |
-| **Select** | — | **Insert Coin** |
-| **L3** (P1) | — | **Test Button** |
-| **R3** (P1) | — | **Service Button** |
-| **R3** (P2) | — | **Pause Button** |
 
 Coin insertion uses edge detection (one press = one coin).
 
@@ -132,12 +110,6 @@ Tate (vertical cabinet) games are detected automatically from the game database 
 | `mednafen_stv_deinterlacer` | `blend` | 480i handling: Blend (smooth, recommended) / Off (renderer bob) / Weave / Bob / Bob with offset / Blend gamma-correct |
 | `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0 / 2 / 4 / 8) |
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
-
-### Input
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `mednafen_stv_input_layout` | `gamepad` | **Gamepad**: SW1/2/3 on face buttons A/B/Y, SW4/5/6 on X/L1/R1. **JAMMA**: original arcade wiring (Saturn-pad convention, same as Beetle Saturn). |
 
 ### Performance
 
