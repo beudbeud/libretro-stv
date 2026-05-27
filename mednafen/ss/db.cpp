@@ -1549,6 +1549,25 @@ static const STVGameInfo STVGI[] =
    { 0x2400000, 0x0400000, STV_MAP_16LE, "mpr20407.10" },
   }
  },
+ {
+  "Fantasy Zone (medal game)",
+  SMPC_AREA_JP,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000000, 0x0080000, STV_MAP_16LE, "epr-21440a.ic13" },
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr-21441.ic2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr-21445.ic1" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr-21442.ic4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr-21446.ic3" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr-21443.ic6" },
+   { 0x1800000, 0x0400000, STV_MAP_16LE, "mpr-21447.ic5" },
+   { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr-21444.ic8" },
+  }
+ },
 };
 
 const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
