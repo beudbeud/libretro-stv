@@ -1559,6 +1559,31 @@ static const STVGameInfo STVGI[] =
   }
  },
  {
+  "All Japan Pro-Wrestling Featuring Virtua (Taiwan)",
+  SMPC_AREA_ASIA_NTSC,
+  STV_CONTROL_3B,
+  STV_EC_CHIP_NONE,
+   0x00000000,
+  STV_ROMTWIDDLE_NONE,
+  false,
+  {
+   { 0x0000001, 0x0100000, STV_MAP_BYTE,  "epr20408.13" },
+   { 0x0200000, 0x0100000, STV_MAP_16BE,  "epr20408.13" },  /* ROM_RELOAD_PLAIN */
+   { 0x0300000, 0x0100000, STV_MAP_16BE,  "epr20408.13" },  /* ROM_RELOAD_PLAIN */
+
+   { 0x0400000, 0x0400000, STV_MAP_16LE, "mpr20400.2" },
+   { 0x0800000, 0x0400000, STV_MAP_16LE, "mpr20401.3" },
+   { 0x0C00000, 0x0400000, STV_MAP_16LE, "mpr20402.4" },
+   { 0x1000000, 0x0400000, STV_MAP_16LE, "mpr20403.5" },
+   { 0x1400000, 0x0400000, STV_MAP_16LE, "mpr20404.6" },
+   { 0x1800000, 0x0400000, STV_MAP_16LE, "mpr20399.1" },
+   { 0x1C00000, 0x0400000, STV_MAP_16LE, "mpr20405.8" },
+   { 0x2000000, 0x0400000, STV_MAP_16LE, "mpr20406.9" },
+   { 0x2400000, 0x0400000, STV_MAP_16LE, "mpr20407.10" },
+  }
+ },
+
+ {
   "Fantasy Zone (medal game)",
   SMPC_AREA_JP,
   STV_CONTROL_3B,
