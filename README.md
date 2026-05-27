@@ -64,23 +64,23 @@ Save states and RetroArch rewind are fully supported. The state size is computed
 
 ## Input mapping
 
-The core follows the same button mapping as **Beetle Saturn** (`beetle-saturn-libretro`):
+Action buttons are mapped ergonomically to face buttons:
 
-| RetroArch button | Saturn button | ST-V function |
-|-----------------|---------------|---------------|
-| B | **A** | SW1 |
-| A | **B** | SW2 |
-| R1 | **C** | SW3 |
-| Y | **X** | SW4 |
-| X | **Y** | SW5 |
-| L1 | **Z** | SW6 |
-| L2 | **L** (Left Shoulder) | — |
-| R2 | **R** (Right Shoulder) | — |
+| RetroArch button | 3-button games | 6-button games |
+|-----------------|----------------|----------------|
+| B | SW1 | SW1 |
+| A | SW2 | SW2 |
+| Y | SW3 | SW3 |
+| X | — | SW4 |
+| L1 | — | SW5 |
+| R1 | — | SW6 |
 | Start | Start | Start |
-| **Select** | — | **Insert Coin** |
-| **L3** (P1) | — | **Test Button** |
-| **R3** (P1) | — | **Service Button** |
-| **R3** (P2) | — | **Pause Button** |
+| **Select** | **Insert Coin** | **Insert Coin** |
+| **L3** (P1) | **Test Button** | **Test Button** |
+| **R3** (P1) | **Service Button** | **Service Button** |
+| **R3** (P2) | **Pause Button** | **Pause Button** |
+
+> **Batman Forever** (3-button with non-standard wiring): Jump → B, Punch → A, Kick → Y.
 
 Coin insertion uses edge detection (one press = one coin).
 
