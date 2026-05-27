@@ -64,8 +64,7 @@ static constexpr int AUDIO_MAX = 44100;  /* 1s @ 44100Hz, mednafen needs >= 500m
 static int16_t audio_buf[AUDIO_MAX * 2];
 
 
-static uint8_t pad_data[2][32] = {};
-static uint8_t *port_ptr[2]    = {};
+static uint8_t *port_ptr[2] = {};
 
 /* ── Hammer (touchscreen) input — Critter Crusher ──────────────────────────── */
 static bool g_is_hammer = false;
@@ -224,22 +223,16 @@ static void update_input()
          *   nom_y = (ptr_y + 32768) * mouse_scale_y / 65536 + mouse_offs_y
          * STVIO then maps nom_x → x∈[0,62], nom_y → y∈[0,46] for the grid. */
         if(port_ptr[0]) {
-            const float msx = game_info ? game_info->mouse_scale_x : 21472.0f;
-            const float msy = game_info ? game_info->mouse_scale_y : 224.0f;
-            const float mox = game_info ? game_info->mouse_offs_x  : 0.0f;
-            const float moy = game_info ? game_info->mouse_offs_y  : 8.0f;
-
+            /* game_info is always non-null here (retro_run() guards before calling update_input) */
             const int16_t ptr_x = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
             const int16_t ptr_y = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
             const bool pressed  = (bool)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
 
-            const int16_t nom_x = (int16_t)((float)((int32_t)ptr_x + 32768) * msx / 65536.0f + mox);
-            const int16_t nom_y = (int16_t)((float)((int32_t)ptr_y + 32768) * msy / 65536.0f + moy);
+            const int16_t nom_x = (int16_t)((float)((int32_t)ptr_x + 32768) * game_info->mouse_scale_x / 65536.0f + game_info->mouse_offs_x);
+            const int16_t nom_y = (int16_t)((float)((int32_t)ptr_y + 32768) * game_info->mouse_scale_y / 65536.0f + game_info->mouse_offs_y);
 
-            port_ptr[0][0] = (uint8_t)( nom_x       & 0xFF);
-            port_ptr[0][1] = (uint8_t)((nom_x >> 8) & 0xFF);
-            port_ptr[0][2] = (uint8_t)( nom_y       & 0xFF);
-            port_ptr[0][3] = (uint8_t)((nom_y >> 8) & 0xFF);
+            MDFN_en16lsb(port_ptr[0] + 0, (uint16_t)nom_x);
+            MDFN_en16lsb(port_ptr[0] + 2, (uint16_t)nom_y);
             port_ptr[0][4] = pressed ? 0x01 : 0x00;
         }
     } else {
@@ -454,17 +447,17 @@ STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
 
         uint32_t color = 0xFFFFFFFFu; /* hidden */
         if(crosshair_on) {
+            static const struct { const char *name; uint32_t rgb; } s_colors[] = {
+                { "white",  0xFFFFFFu }, { "red",    0xFF0000u },
+                { "green",  0x00FF00u }, { "blue",   0x0000FFu },
+                { "yellow", 0xFFFF00u }, { "cyan",   0x00FFFFu },
+            };
+            color = 0xFFFFFFu; /* white default */
             var.key = "mednafen_stv_crosshair_color";
             if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-                if     (!strcmp(var.value, "white"))  color = 0xFFFFFFu;
-                else if(!strcmp(var.value, "red"))    color = 0xFF0000u;
-                else if(!strcmp(var.value, "green"))  color = 0x00FF00u;
-                else if(!strcmp(var.value, "blue"))   color = 0x0000FFu;
-                else if(!strcmp(var.value, "yellow")) color = 0xFFFF00u;
-                else if(!strcmp(var.value, "cyan"))   color = 0x00FFFFu;
-                else                                  color = 0xFFFFFFu;
-            } else {
-                color = 0xFFFFFFu; /* white default if option missing */
+                for(const auto &e : s_colors) {
+                    if(!strcmp(var.value, e.name)) { color = e.rgb; break; }
+                }
             }
         }
         MDFN_IEN_SS::STVIO_SetCrosshairsColor(0, color);
@@ -748,7 +741,6 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         };
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_hammer);
     } else {
-    {
         static const struct retro_input_descriptor desc[] = {
             /* Player 1 */
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
@@ -787,7 +779,6 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         };
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
     }
-    } /* end else (non-hammer) */
 
     /* Signal display rotation. tate_mode=enabled → game_info->rotated=MDFN_ROTATE90 → rotation 1.
      * tate_mode=disabled (default) → rotation 0, overriding any frontend auto-detect. */
