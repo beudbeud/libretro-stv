@@ -392,7 +392,6 @@ static const STVGameInfo STVGI[] =
   }
  },
 
- // Broken
  {
   "Dancing Fever Gold",
   SMPC_AREA_JP,
@@ -402,29 +401,19 @@ static const STVGameInfo STVGI[] =
   STV_ROMTWIDDLE_NONE,
   false,
   {
+   /* ROM layout from MAME dfeverg: single IC13 program ROM at offset 0,
+    * data ROMs 1-6 at 0x400000-0x1800000, then 8-11 (no "7", no "12" — NO_DUMP). */
    { 0x0000000, 0x0080000, STV_MAP_16LE, "13" },
-   { 0x0080000, 0x0080000, STV_MAP_16LE, "13" },
-   { 0x0100000, 0x0080000, STV_MAP_16LE, "13" },
-#if 1
-   { 0x0400000, 0x0400000, STV_MAP_16LE, "2" },
-   { 0x0800000, 0x0400000, STV_MAP_16LE, "3" },
-   { 0x0C00000, 0x0400000, STV_MAP_16LE, "4" },
-   { 0x1000000, 0x0400000, STV_MAP_16LE, "5" },
-   { 0x1400000, 0x0400000, STV_MAP_16LE, "6" },
-   { 0x1800000, 0x0400000, STV_MAP_16LE, "1" },
-#else
    { 0x0400000, 0x0400000, STV_MAP_16LE, "1" },
    { 0x0800000, 0x0400000, STV_MAP_16LE, "2" },
    { 0x0C00000, 0x0400000, STV_MAP_16LE, "3" },
    { 0x1000000, 0x0400000, STV_MAP_16LE, "4" },
    { 0x1400000, 0x0400000, STV_MAP_16LE, "5" },
    { 0x1800000, 0x0400000, STV_MAP_16LE, "6" },
-#endif
    { 0x1C00000, 0x0400000, STV_MAP_16LE, "8" },
    { 0x2000000, 0x0400000, STV_MAP_16LE, "9" },
    { 0x2400000, 0x0400000, STV_MAP_16LE, "10" },
    { 0x2800000, 0x0400000, STV_MAP_16LE, "11" },
-   { 0x2C00000, 0x0400000, STV_MAP_16LE, "12" },
   }
  },
 
