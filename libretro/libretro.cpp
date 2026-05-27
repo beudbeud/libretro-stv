@@ -269,9 +269,29 @@ static void update_input()
 }
 
 /* ── Core options ─────────────────────────────────────────────────────────── */
+
+static retro_core_option_v2_category s_cats[] = {
+    { "system",      "System",      NULL },
+    { "video",       "Video",       NULL },
+    { "performance", "Performance", NULL },
+    { NULL, NULL, NULL }
+};
+
 static retro_core_option_v2_definition s_opts[] = {
+    /* ── System ── */
     { "mednafen_stv_region", "Region", NULL, NULL, NULL, "system",
       { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
+      { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
+      "Boot directly into the game, bypassing the ST-V BIOS startup sequence. On first boot the BIOS runs normally and a state is cached; subsequent boots load that state instantly. The cache is stored per-game in the save directory. Restart required after toggling.", NULL, "system",
+      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_autortc", "Auto-set RTC", NULL, NULL, NULL, "system",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+
+    /* ── Video ── */
+    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_overscan", "Show Horizontal Overscan", NULL, NULL, NULL, "video",
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_blend", "Horizontal Blend Filter", NULL, NULL, NULL, "video",
@@ -279,36 +299,56 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_mesh_transparency", "Improved Mesh Transparency", NULL,
       "Replace VDP1's hardware-accurate (x ^ y) & 1 stipple, used by mesh-bit primitives, with a 50% blend against the final composited image. The stipple looks like a visible checkerboard on a flat panel (it relied on CRT phosphor blur); the blend improves the look of smoke, shadows, water and fade effects. 16-bit framebuffer only.", NULL, "video",
       { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
+      "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
+      { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
     { "mednafen_stv_slstart", "First Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend", "Last Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
-    { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
-      { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
-    { "mednafen_stv_bios_sanity", "BIOS Sanity Checks", NULL, NULL, NULL, "system",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
-    { "mednafen_stv_autortc", "Auto-set RTC", NULL, NULL, NULL, "system",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
-    { "mednafen_stv_autortc_lang", "BIOS Language", NULL, NULL, NULL, "system",
-      { {"english","English"},{"japanese","Japanese"},{"french","French"},
-        {"german","German"},{"spanish","Spanish"},{"italian","Italian"},{NULL,NULL} }, "english" },
-    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
-      "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
-      { {"data_cb","Fast (recommended)"},{"data","Data cache only"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+
+    /* ── Performance ── */
     { "mednafen_stv_frameskip", "Frameskip", NULL,
       "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
       { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
-      "Boot directly into the game, bypassing the ST-V BIOS startup sequence. On first boot the BIOS runs normally and a state is cached; subsequent boots load that state instantly. The cache is stored per-game in the save directory. Restart required after toggling.", NULL, "system",
-      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
-      "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
-      { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
+    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
+      "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
+      { {"data_cb","Fast (recommended)"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
-static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
+static retro_core_options_v2 s_opts_v2 = { s_cats, s_opts };
+
+/* v1 fallback — same options without category_key field */
+static retro_core_option_definition s_opts_v1[] = {
+    { "mednafen_stv_region",           "Region",
+      NULL, { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_cart",             "Expansion Cart",
+      NULL, { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_skip_bios",        "Skip BIOS",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_autortc",          "Auto-set RTC",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_correct_aspect",   "Correct Aspect Ratio",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_h_overscan",       "Show Horizontal Overscan",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_h_blend",          "Horizontal Blend Filter",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_mesh_transparency","Improved Mesh Transparency",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_deinterlacer",     "Deinterlacer",
+      NULL, { {"blend","Blend"},{"off","Off"},{"weave","Weave"},{"bob","Bob"},{"bob_offset","Bob with offset"},{"blend_rg","Blend (gamma-correct)"},{NULL,NULL} }, "blend" },
+    { "mednafen_stv_slstart",          "First Scanline (NTSC)",
+      NULL, { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
+    { "mednafen_stv_slend",            "Last Scanline (NTSC)",
+      NULL, { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+    { "mednafen_stv_frameskip",        "Frameskip",
+      NULL, { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_cpu_cache",        "CPU Cache Emulation",
+      NULL, { {"data_cb","Fast (recommended)"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+    { NULL, NULL, NULL, {{0}}, NULL }
+};
 
 static void apply_options()
 {
@@ -341,10 +381,8 @@ static void apply_options()
     STR_OPT ("mednafen_stv_slstart",      "ss.slstart");
     STR_OPT ("mednafen_stv_slend",        "ss.slend");
     STR_OPT ("mednafen_stv_cart",         "ss.cart");
-    BOOL_OPT("mednafen_stv_bios_sanity",  "ss.bios_sanity");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
-    STR_OPT ("mednafen_stv_autortc_lang", "ss.smpc.autortc.lang");
-    STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
+STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
 #undef BOOL_OPT
 #undef STR_OPT
 
@@ -411,10 +449,28 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
     environ_cb = cb;
     struct retro_log_callback lc = {};
     if(cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &lc)) log_cb = lc.log;
-    if(!cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &s_opts_v2)) {
+    unsigned version = 0;
+    cb(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version);
+    if (version >= 2)
+        cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &s_opts_v2);
+    else if (version >= 1)
+        cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS, s_opts_v1);
+    else {
         static const retro_variable legacy[] = {
-            {"mednafen_stv_region","Region; jp|na|eu|auto"},
-            {NULL,NULL}
+            {"mednafen_stv_region",           "Region; jp|na|eu|auto"},
+            {"mednafen_stv_cart",             "Expansion Cart; auto|none|backup|4mram|8mram"},
+            {"mednafen_stv_skip_bios",        "Skip BIOS; disabled|enabled"},
+            {"mednafen_stv_autortc",          "Auto-set RTC; enabled|disabled"},
+            {"mednafen_stv_correct_aspect",   "Correct Aspect Ratio; enabled|disabled"},
+            {"mednafen_stv_h_overscan",       "Show Horizontal Overscan; enabled|disabled"},
+            {"mednafen_stv_h_blend",          "Horizontal Blend Filter; disabled|enabled"},
+            {"mednafen_stv_mesh_transparency","Improved Mesh Transparency; disabled|enabled"},
+            {"mednafen_stv_deinterlacer",     "Deinterlacer; blend|off|weave|bob|bob_offset|blend_rg"},
+            {"mednafen_stv_slstart",          "First Scanline (NTSC); 8|0|2|4"},
+            {"mednafen_stv_slend",            "Last Scanline (NTSC); 231|224|234|239"},
+            {"mednafen_stv_frameskip",        "Frameskip; disabled|auto|1|2|3|4|5"},
+            {"mednafen_stv_cpu_cache",        "CPU Cache Emulation; data_cb|full"},
+            {NULL, NULL}
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)legacy);
     }
