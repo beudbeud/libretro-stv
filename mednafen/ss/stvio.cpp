@@ -38,6 +38,8 @@ namespace MDFN_IEN_SS
 {
 
 static unsigned ControlScheme;
+static bool     GamepadLayout = false;
+static bool     HasRax        = false;
 
 static uint8* DPtr[13];
 
@@ -140,38 +142,63 @@ void STVIO_UpdateInput(int32 elapsed_time)
   {
    uint16 tmp = DPtr[i] ? MDFN_de16lsb(DPtr[i] + 0x0) : 0;
    {
-    // SW1, SW2, SW3:
-    DataIn[i] ^= (((tmp & 0xA0) >> 1) | ((tmp & 0x50) << 1)) | ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
-
-    // Batman Forever shifts its 3 buttons to bits 1/2/3 (bit0=unused), so the standard
-    // SW1/SW2/SW3 transform misses Kick (bit3).  For all 3B games:
-    //   - undo SAT_C (RETRO R) → bit2 so no shoulder button leaks in
-    //   - RETRO Y (SAT_X=bit2, Xbox X) → bit2 (Punch)
-    //   - RETRO X (SAT_Y=bit1, Xbox Y) → bit3 (Kick)
-    if(ControlScheme == STV_CONTROL_3B)
-    {
-     if(tmp & (1u << 9)) DataIn[i] ^= 0x04;  // undo SAT_C XOR on bit2
-     if(tmp & 0x04)      DataIn[i] &= ~0x04;  // RETRO Y → bit2
-     if(tmp & 0x02)      DataIn[i] &= ~0x08;  // RETRO X → bit3
-    }
+    /* Directions: identical for all layouts */
+    DataIn[i] ^= ((tmp & 0xA0) >> 1) | ((tmp & 0x50) << 1);
 
     if(ControlScheme == STV_CONTROL_RSG)
     {
-     if(tmp & 0x1)
-      DataIn[i] &= ~0x3;
+     DataIn[i] ^= ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
+     if(tmp & 0x1) DataIn[i] &= ~0x3;
+     if(tmp & 0x2) DataIn[i] &= ~0x5;
+     if(tmp & 0x4) DataIn[i] &= ~0x6;
+     if(tmp & 0x8) DataIn[i] &= ~0x7;
+    }
+    else if(GamepadLayout)
+    {
+     /* ── Gamepad layout ──────────────────────────────────────────────
+      * 6B  : SW1←RETRO B, SW2←RETRO A, SW3←RETRO Y (face!),
+      *        SW4←RETRO X, SW5←RETRO L, SW6←RETRO R
+      * 3B  : same as 6B for SW1/2/3 on face buttons
+      * Batman (has_rax, 3B): bit0 unused → Jump/Punch/Kick on face 1/2/3
+      * ──────────────────────────────────────────────────────────────── */
+     if(ControlScheme == STV_CONTROL_3B && HasRax)
+     {
+      /* Batman Forever: PORTA layout is bit0=unused, bit1=Jump, bit2=Punch, bit3=Kick.
+       * Map face buttons 1/2/3 directly to those bit positions. */
+      DataIn[i] ^= ((tmp >> 9) & 0x02) |  /* SAT_A (RETRO B) → bit1 = Jump  */
+                   ((tmp >> 6) & 0x04) |  /* SAT_B (RETRO A) → bit2 = Punch */
+                   ((tmp & 0x04) << 1);   /* SAT_X (RETRO Y) → bit3 = Kick  */
+     }
+     else
+     {
+      /* Standard 3B / 6B: SW1/2/3 on face buttons 1/2/3 in order */
+      DataIn[i] ^= ((tmp >> 10) & 0x01) |  /* SAT_A (RETRO B) → bit0 = SW1 */
+                   ((tmp >>  7) & 0x02) |  /* SAT_B (RETRO A) → bit1 = SW2 */
+                   (tmp         & 0x04);   /* SAT_X (RETRO Y) → bit2 = SW3 */
 
-     if(tmp & 0x2)
-      DataIn[i] &= ~0x5;
-
-     if(tmp & 0x4)
-      DataIn[i] &= ~0x6;
-
-     if(tmp & 0x8)
-      DataIn[i] &= ~0x7;
+      if(ControlScheme != STV_CONTROL_3B)
+      {
+       /* 6B: SW4←RETRO X, SW5←RETRO L, SW6←RETRO R */
+       DataIn[0x5] ^= (
+        ((tmp & 0x02) >> 1)         |  /* SAT_Y (RETRO X) → bit0 = SW4 */
+        ((tmp & 0x01) << 1)         |  /* SAT_Z (RETRO L) → bit1 = SW5 */
+        (((tmp >> 9) & 0x01) << 2)     /* SAT_C (RETRO R) → bit2 = SW6 */
+       ) << (i << 2);
+      }
+     }
     }
     else
     {
-     // SW4, SW5, SW6:
+     /* ── JAMMA layout (Saturn-convention) ───────────────────────────
+      * SW1←SAT_A, SW2←SAT_B, SW3←SAT_C, SW4←SAT_X, SW5←SAT_Y, SW6←SAT_Z
+      * For 3B, also map SAT_R → bit3 so Batman's Kick is reachable via R2.
+      * ──────────────────────────────────────────────────────────────── */
+     DataIn[i] ^= ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
+
+     if(ControlScheme == STV_CONTROL_3B)
+      DataIn[i] ^= (tmp & 0x08);  /* SAT_R (RETRO R2) → bit3 (Batman Kick) */
+
+     /* SW4, SW5, SW6: SAT_X→bit0, SAT_Y→bit1, SAT_Z→bit2 */
      DataIn[0x5] ^= (((tmp >> 2) & 0x01) | (tmp & 0x02) | ((tmp << 2) & 0x04)) << (i << 2);
     }
    }
@@ -347,9 +374,15 @@ static void InitEEPROM(const STVGameInfo* sgi)
   eep.PokeMem(addr, MDFN_de16msb(tmp + (addr << 1)));
 }
 
+void STVIO_SetInputLayout(bool gamepad_mode)
+{
+ GamepadLayout = gamepad_mode;
+}
+
 void STVIO_Init(const STVGameInfo* sgi)
 {
  ControlScheme = sgi->control;
+ HasRax        = sgi->has_rax;
 
  eep.Init();
 

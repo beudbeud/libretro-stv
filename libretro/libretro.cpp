@@ -29,6 +29,7 @@
 #include "ss/vdp1.h"
 #include "ss/vdp1_common.h"
 #include "ss/vdp2.h"
+#include "ss/stvio.h"
 
 using namespace Mednafen;
 
@@ -273,6 +274,7 @@ static void update_input()
 static retro_core_option_v2_category s_cats[] = {
     { "system",      "System",      NULL },
     { "video",       "Video",       NULL },
+    { "input",       "Input",       NULL },
     { "performance", "Performance", NULL },
     { NULL, NULL, NULL }
 };
@@ -306,6 +308,11 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend", "Last Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+
+    /* ── Input ── */
+    { "mednafen_stv_input_layout", "Input Layout", NULL,
+      "'JAMMA' preserves the original arcade wiring (SW1–SW6 in hardware order, same as a JAMMA cabinet). 'Gamepad' remaps buttons to ergonomic face-button positions: SW1/2/3 on A/B/X, SW4/5/6 on Y/L/R.", NULL, "input",
+      { {"jamma","JAMMA (arcade wiring)"},{"gamepad","Gamepad (ergonomic)"},{NULL,NULL} }, "jamma" },
 
     /* ── Performance ── */
     { "mednafen_stv_frameskip", "Frameskip", NULL,
@@ -343,6 +350,8 @@ static retro_core_option_definition s_opts_v1[] = {
       NULL, { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend",            "Last Scanline (NTSC)",
       NULL, { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+    { "mednafen_stv_input_layout",     "Input Layout",
+      NULL, { {"jamma","JAMMA (arcade wiring)"},{"gamepad","Gamepad (ergonomic)"},{NULL,NULL} }, "jamma" },
     { "mednafen_stv_frameskip",        "Frameskip",
       NULL, { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_cpu_cache",        "CPU Cache Emulation",
@@ -393,6 +402,10 @@ STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
     var.key = "mednafen_stv_skip_bios";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         g_stv_skip_bios = (strcmp(var.value, "enabled") == 0);
+
+    var.key = "mednafen_stv_input_layout";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        MDFN_IEN_SS::STVIO_SetInputLayout(strcmp(var.value, "gamepad") == 0);
 
     var.key = "mednafen_stv_mesh_transparency";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -468,6 +481,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
             {"mednafen_stv_deinterlacer",     "Deinterlacer; blend|off|weave|bob|bob_offset|blend_rg"},
             {"mednafen_stv_slstart",          "First Scanline (NTSC); 8|0|2|4"},
             {"mednafen_stv_slend",            "Last Scanline (NTSC); 231|224|234|239"},
+            {"mednafen_stv_input_layout",      "Input Layout; jamma|gamepad"},
             {"mednafen_stv_frameskip",        "Frameskip; disabled|auto|1|2|3|4|5"},
             {"mednafen_stv_cpu_cache",        "CPU Cache Emulation; data_cb|full"},
             {NULL, NULL}
