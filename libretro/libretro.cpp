@@ -29,6 +29,7 @@
 #include "ss/vdp1.h"
 #include "ss/vdp1_common.h"
 #include "ss/vdp2.h"
+#include "ss/stvio.h"
 
 using namespace Mednafen;
 
@@ -63,28 +64,26 @@ static constexpr int AUDIO_MAX = 44100;  /* 1s @ 44100Hz, mednafen needs >= 500m
 static int16_t audio_buf[AUDIO_MAX * 2];
 
 
-static uint8_t pad_data[2][32] = {};
-static uint8_t *port_ptr[2]    = {};
+static uint8_t *port_ptr[2] = {};
+
+/* ── Hammer (touchscreen) input — Critter Crusher ──────────────────────────── */
+static bool g_is_hammer = false;
+/* gun buffer layout: [nom_x lo, nom_x hi, nom_y lo, nom_y hi, buttons]
+ * nom_x ∈ [0, mouse_scale_x ≈ 21472], nom_y ∈ [mouse_offs_y, mouse_offs_y+mouse_scale_y]
+ * RETRO_DEVICE_POINTER [-32768,32767] → this space via (ptr+32768)*scale/65536+offs */
 
 static std::string sys_dir, save_dir;
 
 /* ── BIOS Skip ─────────────────────────────────────────────────────────────── */
-static bool        g_stv_skip_bios      = false;
-static bool        g_bios_state_saved   = false;
+static bool        g_stv_skip_bios        = false;
+static bool        g_bios_state_saved     = false;
+static bool        g_bios_intback_resaved = false;
 static std::string g_bios_state_path;
-static bool        g_bios_saw_cart_jump = false; /* PC entered cart ROM (0x02000000-0x04FFFFFF) */
-static int         g_bios_stable_frames = 0;     /* consecutive same-page frames after cart jump */
-static uint32_t    g_bios_last_pc_page  = 0xFFFFFFFFu;
-/* Game-start detection strategy:
- * - Primary  (most games): SMPC INTBACK fires when game polls input. Save after
- *   30 stable frames post first INTBACK call.
- * - Fallback (games without INTBACK, e.g. Astra SuperStars, Batman Forever):
- *   Two-phase PC detection:
- *   Phase 1 — wait for the BIOS to jump into cart ROM (PC in 0x02000000-0x04FFFFFF).
- *             The BIOS runs a stable loop in Work RAM (0x0601xxxx) while showing
- *             its logo; ignoring that loop is critical.
- *   Phase 2 — after the cart ROM jump, wait for PC stability (120 consecutive
- *             frames in the same 64 KB page) which marks the game's own loop. */
+static int         g_bios_total_frames    = 0;
+/* Strategy: save once at BIOS_SKIP_FALLBACK_FRAMES (900 frames / 15 s),
+ * then overwrite once if SMPC INTBACK fires (games that call INTBACK
+ * during attract or first input poll get a fresher game-start state). */
+static const int   BIOS_SKIP_FALLBACK_FRAMES = 1080; /* 18 s at 60 fps */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
@@ -216,23 +215,44 @@ static void update_input()
     if(!input_poll_cb || !input_state_cb) return;
     input_poll_cb();
 
-    /* ── Player gamepad inputs ── */
-    for(int p = 0; p < 2; p++) {
-        if(!port_ptr[p]) continue;
+    /* ── Player inputs ── */
+    if(g_is_hammer) {
+        /* Critter Crusher: touchscreen via RETRO_DEVICE_POINTER.
+         * Convert pointer [-32768,32767] to mednafen gun buffer space:
+         *   nom_x = (ptr_x + 32768) * mouse_scale_x / 65536 + mouse_offs_x
+         *   nom_y = (ptr_y + 32768) * mouse_scale_y / 65536 + mouse_offs_y
+         * STVIO then maps nom_x → x∈[0,62], nom_y → y∈[0,46] for the grid. */
+        if(port_ptr[0]) {
+            /* game_info is always non-null here (retro_run() guards before calling update_input) */
+            const int16_t ptr_x = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+            const int16_t ptr_y = (int16_t)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+            const bool pressed  = (bool)input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
 
-        uint16_t bits = 0;
-        for(auto &m : s_pad_map)
-            if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
-                bits |= (1u << m.bit);
+            const int16_t nom_x = (int16_t)((float)((int32_t)ptr_x + 32768) * game_info->mouse_scale_x / 65536.0f + game_info->mouse_offs_x);
+            const int16_t nom_y = (int16_t)((float)((int32_t)ptr_y + 32768) * game_info->mouse_scale_y / 65536.0f + game_info->mouse_offs_y);
 
-        /* No simultaneous opposite directions */
-        if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
-            bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
-        if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
-            bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+            MDFN_en16lsb(port_ptr[0] + 0, (uint16_t)nom_x);
+            MDFN_en16lsb(port_ptr[0] + 2, (uint16_t)nom_y);
+            port_ptr[0][4] = pressed ? 0x01 : 0x00;
+        }
+    } else {
+        for(int p = 0; p < 2; p++) {
+            if(!port_ptr[p]) continue;
 
-        port_ptr[p][0] = (uint8_t)(bits & 0xFF);
-        port_ptr[p][1] = (uint8_t)(bits >> 8);
+            uint16_t bits = 0;
+            for(auto &m : s_pad_map)
+                if(input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, m.retro))
+                    bits |= (1u << m.bit);
+
+            /* No simultaneous opposite directions */
+            if((bits & (1<<SAT_BIT_UP))   && (bits & (1<<SAT_BIT_DOWN)))
+                bits &= ~((1<<SAT_BIT_UP)|(1<<SAT_BIT_DOWN));
+            if((bits & (1<<SAT_BIT_LEFT)) && (bits & (1<<SAT_BIT_RIGHT)))
+                bits &= ~((1<<SAT_BIT_LEFT)|(1<<SAT_BIT_RIGHT));
+
+            port_ptr[p][0] = (uint8_t)(bits & 0xFF);
+            port_ptr[p][1] = (uint8_t)(bits >> 8);
+        }
     }
 
     /* ── ST-V Builtin port 12 (Test / Service / Pause / Coin) ──
@@ -276,9 +296,37 @@ static void update_input()
 }
 
 /* ── Core options ─────────────────────────────────────────────────────────── */
+
+static retro_core_option_v2_category s_cats[] = {
+    { "system",      "System",      NULL },
+    { "input",       "Input",       NULL },
+    { "video",       "Video",       NULL },
+    { "performance", "Performance", NULL },
+    { NULL, NULL, NULL }
+};
+
 static retro_core_option_v2_definition s_opts[] = {
+    /* ── System ── */
     { "mednafen_stv_region", "Region", NULL, NULL, NULL, "system",
       { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
+      { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
+      "Boot directly into the game, bypassing the ST-V BIOS startup sequence. On first boot the BIOS runs normally and a state is cached; subsequent boots load that state instantly. The cache is stored per-game in the save directory. Restart required after toggling.", NULL, "system",
+      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_autortc", "Auto-set RTC", NULL, NULL, NULL, "system",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    /* ── Input ── */
+    { "mednafen_stv_crosshair", "Touchscreen Crosshair", NULL,
+      "Show a crosshair cursor for touchscreen games (Critter Crusher).", NULL, "input",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair_color", "Touchscreen Crosshair Color", NULL,
+      "Color of the touchscreen crosshair.", NULL, "input",
+      { {"white","White"},{"red","Red"},{"green","Green"},{"blue","Blue"},{"yellow","Yellow"},{"cyan","Cyan"},{NULL,NULL} }, "white" },
+
+    /* ── Video ── */
+    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_overscan", "Show Horizontal Overscan", NULL, NULL, NULL, "video",
       { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
     { "mednafen_stv_h_blend", "Horizontal Blend Filter", NULL, NULL, NULL, "video",
@@ -286,36 +334,60 @@ static retro_core_option_v2_definition s_opts[] = {
     { "mednafen_stv_mesh_transparency", "Improved Mesh Transparency", NULL,
       "Replace VDP1's hardware-accurate (x ^ y) & 1 stipple, used by mesh-bit primitives, with a 50% blend against the final composited image. The stipple looks like a visible checkerboard on a flat panel (it relied on CRT phosphor blur); the blend improves the look of smoke, shadows, water and fade effects. 16-bit framebuffer only.", NULL, "video",
       { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
+      "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
+      { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
     { "mednafen_stv_slstart", "First Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend", "Last Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
-    { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
-      { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
-    { "mednafen_stv_bios_sanity", "BIOS Sanity Checks", NULL, NULL, NULL, "system",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
-    { "mednafen_stv_autortc", "Auto-set RTC", NULL, NULL, NULL, "system",
-      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
-    { "mednafen_stv_autortc_lang", "BIOS Language", NULL, NULL, NULL, "system",
-      { {"english","English"},{"japanese","Japanese"},{"french","French"},
-        {"german","German"},{"spanish","Spanish"},{"italian","Italian"},{NULL,NULL} }, "english" },
-    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
-      "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
-      { {"data_cb","Fast (recommended)"},{"data","Data cache only"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+
+    /* ── Performance ── */
     { "mednafen_stv_frameskip", "Frameskip", NULL,
       "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
       { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
-      "Boot directly into the game, bypassing the ST-V BIOS startup sequence. On first boot the BIOS runs normally and a state is cached; subsequent boots load that state instantly. The cache is stored per-game in the save directory. Restart required after toggling.", NULL, "system",
-      { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
-    { "mednafen_stv_deinterlacer", "Deinterlacer", NULL,
-      "Handling of 480i scenes (e.g. Astra Superstars, VF Kids attract). 'Blend' averages adjacent fields for smooth LCD output (recommended). 'Off' duplicates each rendered field's lines onto the opposite-field row at render time (no CPU cost but visible per-line transitions on detailed sprites). 'Weave' is CRT-like (combing on motion). 'Bob Offset' is sharp but flickers.", NULL, "video",
-      { {"blend","Blend (smooth, recommended for LCD)"},{"off","Off (renderer-side bob, full resolution)"},{"weave","Weave (CRT-like, combing on motion)"},{"bob","Bob"},{"bob_offset","Bob with offset (sharp, flickers)"},{"blend_rg","Blend (gamma-correct, more CPU)"},{NULL,NULL} }, "blend" },
+    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
+      "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
+      { {"data_cb","Fast (recommended)"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+
     { NULL,NULL,NULL,NULL,NULL,NULL,{{0}},NULL }
 };
-static retro_core_options_v2 s_opts_v2 = { nullptr, s_opts };
+static retro_core_options_v2 s_opts_v2 = { s_cats, s_opts };
+
+/* v1 fallback — same options without category_key field */
+static retro_core_option_definition s_opts_v1[] = {
+    { "mednafen_stv_region",           "Region",
+      NULL, { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_cart",             "Expansion Cart",
+      NULL, { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_skip_bios",        "Skip BIOS",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_autortc",          "Auto-set RTC",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair",        "Touchscreen Crosshair",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_crosshair_color",  "Touchscreen Crosshair Color",
+      NULL, { {"white","White"},{"red","Red"},{"green","Green"},{"blue","Blue"},{"yellow","Yellow"},{"cyan","Cyan"},{NULL,NULL} }, "white" },
+    { "mednafen_stv_correct_aspect",   "Correct Aspect Ratio",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_h_overscan",       "Show Horizontal Overscan",
+      NULL, { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
+    { "mednafen_stv_h_blend",          "Horizontal Blend Filter",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_mesh_transparency","Improved Mesh Transparency",
+      NULL, { {"disabled","Disabled"},{"enabled","Enabled"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_deinterlacer",     "Deinterlacer",
+      NULL, { {"blend","Blend"},{"off","Off"},{"weave","Weave"},{"bob","Bob"},{"bob_offset","Bob with offset"},{"blend_rg","Blend (gamma-correct)"},{NULL,NULL} }, "blend" },
+    { "mednafen_stv_slstart",          "First Scanline (NTSC)",
+      NULL, { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
+    { "mednafen_stv_slend",            "Last Scanline (NTSC)",
+      NULL, { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+    { "mednafen_stv_frameskip",        "Frameskip",
+      NULL, { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
+    { "mednafen_stv_cpu_cache",        "CPU Cache Emulation",
+      NULL, { {"data_cb","Fast (recommended)"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+    { NULL, NULL, NULL, {{0}}, NULL }
+};
 
 static void apply_options()
 {
@@ -348,10 +420,8 @@ static void apply_options()
     STR_OPT ("mednafen_stv_slstart",      "ss.slstart");
     STR_OPT ("mednafen_stv_slend",        "ss.slend");
     STR_OPT ("mednafen_stv_cart",         "ss.cart");
-    BOOL_OPT("mednafen_stv_bios_sanity",  "ss.bios_sanity");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
-    STR_OPT ("mednafen_stv_autortc_lang", "ss.smpc.autortc.lang");
-    STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
+STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
 #undef BOOL_OPT
 #undef STR_OPT
 
@@ -366,6 +436,32 @@ static void apply_options()
     var.key = "mednafen_stv_mesh_transparency";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         MDFN_IEN_SS::VDP1::SetMeshImproved(strcmp(var.value, "enabled") == 0);
+
+    /* Touchscreen crosshair. STVIO_SetCrosshairsColor is a no-op for non-HAMMER games.
+     * color > 0xFFFFFF disables drawing (chair_draw = color <= 0xFFFFFF in gun.cpp). */
+    {
+        bool crosshair_on = true;
+        var.key = "mednafen_stv_crosshair";
+        if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+            crosshair_on = strcmp(var.value, "disabled") != 0;
+
+        uint32_t color = 0xFFFFFFFFu; /* hidden */
+        if(crosshair_on) {
+            static const struct { const char *name; uint32_t rgb; } s_colors[] = {
+                { "white",  0xFFFFFFu }, { "red",    0xFF0000u },
+                { "green",  0x00FF00u }, { "blue",   0x0000FFu },
+                { "yellow", 0xFFFF00u }, { "cyan",   0x00FFFFu },
+            };
+            color = 0xFFFFFFu; /* white default */
+            var.key = "mednafen_stv_crosshair_color";
+            if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                for(const auto &e : s_colors) {
+                    if(!strcmp(var.value, e.name)) { color = e.rgb; break; }
+                }
+            }
+        }
+        MDFN_IEN_SS::STVIO_SetCrosshairsColor(0, color);
+    }
 
     var.key = "mednafen_stv_frameskip";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
@@ -418,10 +514,30 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
     environ_cb = cb;
     struct retro_log_callback lc = {};
     if(cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &lc)) log_cb = lc.log;
-    if(!cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &s_opts_v2)) {
+    unsigned version = 0;
+    cb(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version);
+    if (version >= 2)
+        cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &s_opts_v2);
+    else if (version >= 1)
+        cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS, s_opts_v1);
+    else {
         static const retro_variable legacy[] = {
-            {"mednafen_stv_region","Region; jp|na|eu|auto"},
-            {NULL,NULL}
+            {"mednafen_stv_region",           "Region; jp|na|eu|auto"},
+            {"mednafen_stv_cart",             "Expansion Cart; auto|none|backup|4mram|8mram"},
+            {"mednafen_stv_skip_bios",        "Skip BIOS; disabled|enabled"},
+            {"mednafen_stv_autortc",          "Auto-set RTC; enabled|disabled"},
+            {"mednafen_stv_crosshair",        "Touchscreen Crosshair; enabled|disabled"},
+            {"mednafen_stv_crosshair_color",  "Touchscreen Crosshair Color; white|red|green|blue|yellow|cyan"},
+            {"mednafen_stv_correct_aspect",   "Correct Aspect Ratio; enabled|disabled"},
+            {"mednafen_stv_h_overscan",       "Show Horizontal Overscan; enabled|disabled"},
+            {"mednafen_stv_h_blend",          "Horizontal Blend Filter; disabled|enabled"},
+            {"mednafen_stv_mesh_transparency","Improved Mesh Transparency; disabled|enabled"},
+            {"mednafen_stv_deinterlacer",     "Deinterlacer; blend|off|weave|bob|bob_offset|blend_rg"},
+            {"mednafen_stv_slstart",          "First Scanline (NTSC); 8|0|2|4"},
+            {"mednafen_stv_slend",            "Last Scanline (NTSC); 231|224|234|239"},
+            {"mednafen_stv_frameskip",        "Frameskip; disabled|auto|1|2|3|4|5"},
+            {"mednafen_stv_cpu_cache",        "CPU Cache Emulation; data_cb|full"},
+            {NULL, NULL}
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)legacy);
     }
@@ -494,9 +610,10 @@ RETRO_API void retro_init(void)
     MDFNI_SetSetting("filesys.path_firmware", sys_dir.c_str());
 
     // BIOS filenames — mednafen builds: sys_dir + "/" + filename
-    MDFNI_SetSetting("ss.bios_stv_jp",  "epr-20091.ic8");   // ST-V Japan
-    MDFNI_SetSetting("ss.bios_stv_na",  "epr-17952a.ic8");  // ST-V North America
-    MDFNI_SetSetting("ss.bios_stv_eu",  "epr-17954a.ic8");  // ST-V Europe
+    MDFNI_SetSetting("ss.bios_stv_jp",   "epr-20091.ic8");   // ST-V Japan
+    MDFNI_SetSetting("ss.bios_stv_asia", "epr-19854.ic8");   // ST-V Asia/Taiwan
+    MDFNI_SetSetting("ss.bios_stv_na",   "epr-17952a.ic8");  // ST-V North America
+    MDFNI_SetSetting("ss.bios_stv_eu",   "epr-17954a.ic8");  // ST-V Europe
     MDFNI_SetSetting("ss.bios_jp",      "sega_101.bin");    // Saturn Japan (unused for ST-V)
     MDFNI_SetSetting("ss.bios_na_eu",   "mpr-17933.bin");   // Saturn NA/EU (unused for ST-V)
 
@@ -547,11 +664,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     apply_options();
 
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
-    g_bios_state_saved      = false;
+    g_bios_state_saved        = false;
+    g_bios_intback_resaved    = false;
     g_bios_state_path.clear();
-    g_bios_saw_cart_jump    = false;
-    g_bios_stable_frames    = 0;
-    g_bios_last_pc_page     = 0xFFFFFFFFu;
+    g_bios_total_frames       = 0;
     if(g_stv_skip_bios) {
         char md5_hex[33] = {};
         for(int i = 0; i < 16; i++)
@@ -570,6 +686,13 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         }
     }
 
+    /* Detect Hammer (touchscreen) games — ss.cpp pushes "gun" as first
+     * DesiredInput entry for STV_CONTROL_HAMMER titles (Critter Crusher). */
+    g_is_hammer = !game_info->DesiredInput.empty()
+               && game_info->DesiredInput[0].device_name
+               && strcmp(game_info->DesiredInput[0].device_name, "gun") == 0;
+    lr_log(RETRO_LOG_INFO, "Input scheme: %s\n", g_is_hammer ? "hammer/touchscreen" : "gamepad");
+
     /* Initialize ALL ports declared by the SS module (0..N-1).
      * ST-V has 13 ports (port12 = "builtin"). Without initializing all
      * of them, DPtr[12] stays nullptr → STVIO_TransformInput() crashes
@@ -578,14 +701,23 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         int nports = (int)game_info->PortInfo.size();
         lr_log(RETRO_LOG_INFO, "SS module has %d input ports\n", nports);
         for(int p = 0; p < nports; p++) {
-            /* type 0 = first/default device for this port */
             MDFNI_SetInput(p, 0);
         }
-        /* Gamepad for players 0 and 1 (type 1 = gamepad) */
-        for(int p = 0; p < 2; p++) {
-            port_ptr[p] = MDFNI_SetInput(p, 1);
-            if(port_ptr[p]) memset(port_ptr[p], 0, 2);
+
+        if(g_is_hammer) {
+            /* Gun type = index 7 in InputDeviceInfoSSVPort (smpc.cpp).
+             * STVIO_SetInput only accepts type="gun" for port 0 in HAMMER scheme;
+             * gamepad would be silently nulled, disabling all touchscreen input. */
+            port_ptr[0] = MDFNI_SetInput(0, 7);
+            if(port_ptr[0]) memset(port_ptr[0], 0, 5);
+            port_ptr[1] = nullptr;
+        } else {
+            for(int p = 0; p < 2; p++) {
+                port_ptr[p] = MDFNI_SetInput(p, 1);
+                if(port_ptr[p]) memset(port_ptr[p], 0, 2);
+            }
         }
+
         /* Port 12 = builtin (type 0) — holds STV Test/Service/Pause */
         int builtin_port = nports - 1;
         builtin_ptr = MDFNI_SetInput(builtin_port, 0);
@@ -597,7 +729,18 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
            (double)game_info->fps/(65536.0*256.0));
 
     /* Input descriptors — shown in RetroArch's control remapping UI */
-    {
+    if(g_is_hammer) {
+        static const struct retro_input_descriptor desc_hammer[] = {
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_X,      "Touch X"},
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_Y,      "Touch Y"},
+            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_PRESSED,"Touch"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_SELECT,  "Insert Coin"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_L3,      "Test Button"},
+            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_R3,      "Service Button"},
+            {0,0,0,0,nullptr},
+        };
+        environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_hammer);
+    } else {
         static const struct retro_input_descriptor desc[] = {
             /* Player 1 */
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
@@ -707,9 +850,11 @@ RETRO_API void retro_unload_game(void)
 {
     if(game_info) { MDFNI_CloseGame(); game_info = nullptr; }
     port_ptr[0] = port_ptr[1] = nullptr;
+    g_is_hammer = false;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
-    g_bios_state_saved      = false;
+    g_bios_state_saved        = false;
+    g_bios_intback_resaved    = false;
     g_bios_state_path.clear();
 }
 
@@ -782,46 +927,31 @@ RETRO_API void retro_run(void)
 
     MDFNI_Emulate(&espec);
 
-    if(g_stv_skip_bios && !g_bios_state_saved && !g_bios_state_path.empty()) {
-        const uint32_t pc      = MDFN_IEN_SS::SS_GetMasterPC();
+    if(g_stv_skip_bios && !g_bios_state_path.empty()
+       && !(g_bios_state_saved && g_bios_intback_resaved)) {
         const uint32_t intback = MDFN_IEN_SS::SS_GetINTBACKCount();
-        const uint32_t pc_page = pc >> 16;
 
-        /* Phase 1: mark when the BIOS first jumps into cart ROM. The BIOS runs
-         * a stable loop in Work RAM (0x0601xxxx) while showing its logo — we
-         * must not treat that loop as the game's loop. */
-        if(!g_bios_saw_cart_jump && pc >= 0x02000000u && pc < 0x05000000u) {
-            g_bios_saw_cart_jump = true;
-            lr_log(RETRO_LOG_INFO, "[skip_bios] cart ROM jump detected at pc=0x%08x\n", pc);
-        }
+        g_bios_total_frames++;
 
-        /* Phase 2: PC stability counting only after the cart ROM jump. */
-        if(g_bios_saw_cart_jump || intback > 0) {
-            if(pc_page == g_bios_last_pc_page)
-                g_bios_stable_frames++;
-            else {
-                g_bios_stable_frames = 0;
-                g_bios_last_pc_page  = pc_page;
-            }
-        }
-
-        if((g_bios_stable_frames & 0x3F) == 1)
-            lr_log(RETRO_LOG_INFO, "[skip_bios] pc=0x%08x page=0x%04x stable=%d intback=%u cart_jump=%d\n",
-                   pc, pc_page, g_bios_stable_frames, intback, (int)g_bios_saw_cart_jump);
-
-        const bool trigger = (intback > 0  && g_bios_stable_frames >= 30) ||
-                             (intback == 0 && g_bios_stable_frames >= 120);
-
-        if(trigger) {
+        if(!g_bios_state_saved && g_bios_total_frames >= BIOS_SKIP_FALLBACK_FRAMES) {
             try {
                 Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
                 MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
-                g_bios_state_saved = true;
-                lr_log(RETRO_LOG_INFO, "[skip_bios] state cached (page=0x%04x stable=%d intback=%u): %s\n",
-                       pc_page, g_bios_stable_frames, intback, g_bios_state_path.c_str());
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state saved (frame %d)\n", g_bios_total_frames);
             } catch(...) {
-                g_bios_state_saved = true;
-                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state: %s\n", g_bios_state_path.c_str());
+                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to save state\n");
+            }
+            g_bios_state_saved = true;
+        } else if(g_bios_state_saved && !g_bios_intback_resaved && intback > 0) {
+            /* Re-save once on first INTBACK — yields a fresher game-start state
+             * for games that call INTBACK during attract or first input poll. */
+            g_bios_intback_resaved = true;
+            try {
+                Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
+                MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
+                lr_log(RETRO_LOG_INFO, "[skip_bios] state re-saved on INTBACK (frame %d)\n", g_bios_total_frames);
+            } catch(...) {
+                lr_log(RETRO_LOG_WARN, "[skip_bios] failed to re-save state\n");
             }
         }
     }

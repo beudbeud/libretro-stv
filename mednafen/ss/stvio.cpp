@@ -38,6 +38,7 @@ namespace MDFN_IEN_SS
 {
 
 static unsigned ControlScheme;
+static bool     HasRax = false;
 
 static uint8* DPtr[13];
 
@@ -140,27 +141,40 @@ void STVIO_UpdateInput(int32 elapsed_time)
   {
    uint16 tmp = DPtr[i] ? MDFN_de16lsb(DPtr[i] + 0x0) : 0;
    {
-    // SW1, SW2, SW3:
-    DataIn[i] ^= (((tmp & 0xA0) >> 1) | ((tmp & 0x50) << 1)) | ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
+    /* Directions: identical for all layouts */
+    DataIn[i] ^= ((tmp & 0xA0) >> 1) | ((tmp & 0x50) << 1);
 
     if(ControlScheme == STV_CONTROL_RSG)
     {
-     if(tmp & 0x1)
-      DataIn[i] &= ~0x3;
-
-     if(tmp & 0x2)
-      DataIn[i] &= ~0x5;
-
-     if(tmp & 0x4)
-      DataIn[i] &= ~0x6;
-
-     if(tmp & 0x8)
-      DataIn[i] &= ~0x7;
+     DataIn[i] ^= ((tmp >> 10) & 0x01) | ((tmp >> 7) & 0x06);
+     if(tmp & 0x1) DataIn[i] &= ~0x3;
+     if(tmp & 0x2) DataIn[i] &= ~0x5;
+     if(tmp & 0x4) DataIn[i] &= ~0x6;
+     if(tmp & 0x8) DataIn[i] &= ~0x7;
+    }
+    else if(ControlScheme == STV_CONTROL_3B && HasRax)
+    {
+     /* Batman Forever: PORTA bit0=unused, bit1=Jump, bit2=Punch, bit3=Kick */
+     DataIn[i] ^= ((tmp >> 9) & 0x02) |  /* RETRO B → bit1 = Jump  */
+                  ((tmp >> 6) & 0x04) |  /* RETRO A → bit2 = Punch */
+                  ((tmp & 0x04) << 1);   /* RETRO Y → bit3 = Kick  */
     }
     else
     {
-     // SW4, SW5, SW6:
-     DataIn[0x5] ^= (((tmp >> 2) & 0x01) | (tmp & 0x02) | ((tmp << 2) & 0x04)) << (i << 2);
+     /* 3B / 6B: SW1←RETRO B, SW2←RETRO A, SW3←RETRO Y */
+     DataIn[i] ^= ((tmp >> 10) & 0x01) |  /* RETRO B → bit0 = SW1 */
+                  ((tmp >>  7) & 0x02) |  /* RETRO A → bit1 = SW2 */
+                  (tmp         & 0x04);   /* RETRO Y → bit2 = SW3 */
+
+     if(ControlScheme != STV_CONTROL_3B)
+     {
+      /* 6B: SW4←RETRO X, SW5←RETRO L, SW6←RETRO R */
+      DataIn[0x5] ^= (
+       ((tmp & 0x02) >> 1)        |  /* RETRO X → bit0 = SW4 */
+       ((tmp & 0x01) << 1)        |  /* RETRO L → bit1 = SW5 */
+       (((tmp >> 9) & 0x01) << 2)    /* RETRO R → bit2 = SW6 */
+      ) << (i << 2);
+     }
     }
    }
    //
@@ -338,6 +352,7 @@ static void InitEEPROM(const STVGameInfo* sgi)
 void STVIO_Init(const STVGameInfo* sgi)
 {
  ControlScheme = sgi->control;
+ HasRax        = sgi->has_rax;
 
  eep.Init();
 

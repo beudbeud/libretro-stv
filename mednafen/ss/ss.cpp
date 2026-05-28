@@ -148,6 +148,7 @@ static std::vector<CDInterface*> *cdifs = NULL;
 static std::bitset<1U << (27 - SH7095_EXT_MAP_GRAN_BITS)> FMIsWriteable;
 static uint16 fmap_dummy[(1U << SH7095_EXT_MAP_GRAN_BITS) / sizeof(uint16)];
 
+
 /*
  SH-2 external bus address map:
   CS0: 0x00000000...0x01FFFFFF (16-bit)
@@ -1434,8 +1435,10 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
 
  if(cart_type == CART_STV)
  {
-  if(smpc_area == SMPC_AREA_JP || smpc_area == SMPC_AREA_ASIA_NTSC)
+  if(smpc_area == SMPC_AREA_JP)
    biospath_sname = "ss.bios_stv_jp";
+  else if(smpc_area == SMPC_AREA_ASIA_NTSC)
+   biospath_sname = "ss.bios_stv_asia";
   else if(smpc_area == SMPC_AREA_EU_PAL)
    biospath_sname = "ss.bios_stv_eu";
   else
@@ -2502,9 +2505,10 @@ static const MDFNSetting SSSettings[] =
  { "ss.bios_jp", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Japan ROM BIOS"), NULL, MDFNST_STRING, "sega_101.bin" },
  { "ss.bios_na_eu", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the North America and Europe ROM BIOS"), NULL, MDFNST_STRING, "mpr-17933.bin" },
 
- { "ss.bios_stv_jp", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Japan ST-V ROM BIOS"), NULL, MDFNST_STRING, "epr-20091.ic8" },
- { "ss.bios_stv_na", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the North America ST-V ROM BIOS"), NULL, MDFNST_STRING, "epr-17952a.ic8" },
- { "ss.bios_stv_eu", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Europe ST-V ROM BIOS"), NULL, MDFNST_STRING, "epr-17954a.ic8" },
+ { "ss.bios_stv_jp",   MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Japan ST-V ROM BIOS"),        NULL, MDFNST_STRING, "epr-20091.ic8"  },
+ { "ss.bios_stv_asia", MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Asia/Taiwan ST-V ROM BIOS"), NULL, MDFNST_STRING, "epr-19854.ic8"  },
+ { "ss.bios_stv_na",   MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the North America ST-V ROM BIOS"), NULL, MDFNST_STRING, "epr-17952a.ic8" },
+ { "ss.bios_stv_eu",   MDFNSF_EMU_STATE | MDFNSF_CAT_PATH, gettext_noop("Path to the Europe ST-V ROM BIOS"),      NULL, MDFNST_STRING, "epr-17954a.ic8" },
 
  { "ss.scsp.resamp_quality", MDFNSF_NOFLAGS, gettext_noop("SCSP output resampler quality."),
 	gettext_noop("0 is lowest quality and CPU usage, 10 is highest quality and CPU usage.  The resampler that this setting refers to is used for converting from 44.1KHz to the sampling rate of the host audio device Mednafen is using.  Changing Mednafen's output rate, via the \"\5sound.rate\" setting, to \"44100\" may bypass the resampler, which can decrease CPU usage by Mednafen, and can increase or decrease audio quality, depending on various operating system and hardware factors."), MDFNST_UINT, "4", "0", "10" },
