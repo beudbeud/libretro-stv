@@ -26,7 +26,8 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }}
           cmake --build build --parallel $(nproc)
 
       - name: Rename artifact
@@ -55,6 +56,7 @@ jobs:
         run: |
           make -f libretro/Makefile.libretro \
                platform=${{ matrix.platform }} \
+               CORE_VERSION=${{ github.ref_name }} \
                -j$(nproc)
 
       - name: Rename artifact
@@ -74,11 +76,20 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
+      - name: Update info file version
+        run: |
+          sed -i "s/^display_version = .*/display_version = \"${{ github.ref_name }}\"/" \
+            mednafen_stv_libretro.info
+
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         with:
-          files: mednafen_stv_libretro_*.so
+          files: |
+            mednafen_stv_libretro_*.so
+            mednafen_stv_libretro.info

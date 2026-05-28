@@ -553,7 +553,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info *info)
 {
     memset(info, 0, sizeof(*info));
     info->library_name     = "Mednafen STV";
-    info->library_version  = MEDNAFEN_VERSION;
+    info->library_version  = LIBRETRO_CORE_VERSION;
     info->valid_extensions = "zip|ic8|bin|cue|toc|ccd|chd|m3u";
     info->need_fullpath    = true;
     info->block_extract    = true;   /* mednafen handles zip extraction itself */
