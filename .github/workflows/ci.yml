@@ -56,8 +56,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-arm64
+
       - name: Build
         run: |
           make -f libretro/Makefile.libretro \
                platform=android-arm64 \
+               CC="ccache $CC" CXX="ccache $CXX" \
                -j$(nproc)
