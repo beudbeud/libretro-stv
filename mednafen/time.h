@@ -1,23 +1,25 @@
 // mednafen/time.h — merged Time.h + system <time.h> forwarder
 //
-// On Windows (case-insensitive filesystem), Time.h and time.h resolve to the
-// same file. This merged header handles both inclusion contexts:
+// On Windows (case-insensitive filesystem) Time.h == time.h, so this single
+// file must serve both roles:
 //
-//   C++ context  (#include "Time.h" from mednafen code)
-//     → provides the Mednafen::Time namespace (original Time.h content)
-//   C context    (#include <time.h> from trio/triostr.h etc.)
-//     → forwards to the real system <time.h> via #include_next
+//   • system <time.h> replacement : always forward via #include_next
+//   • Mednafen::Time C++ namespace : only when types.h is fully initialised
+//
+// The split-guard design avoids the circular-include problem: types.h sets
+// __MDFN_TYPES_H at its opening line (before int64 is defined) and sets
+// __MDFN_TYPES_H_COMPLETE at its very last line.  We gate the namespace on
+// the completion flag so it is never emitted during types.h initialisation.
 
-#ifdef __cplusplus
-// ── C++ : Mednafen Time.h ────────────────────────────────────────────────────
-#ifndef __MDFN_TIME_H
-#define __MDFN_TIME_H
-
-#include <mednafen/types.h>
-
-// Use #include_next to skip mednafen/ and reach the real system time.h
-// (plain #include <time.h> would find this file again on Windows)
+// ── Part 1 : system <time.h> (one-shot, no dependency on types.h) ───────────
+#ifndef _MDFN_TIME_H_SYSTEM_INCLUDED
+#define _MDFN_TIME_H_SYSTEM_INCLUDED
 #include_next <time.h>
+#endif
+
+// ── Part 2 : Mednafen::Time namespace (C++ only, after types.h is complete) ─
+#if defined(__cplusplus) && defined(__MDFN_TYPES_H_COMPLETE) && !defined(__MDFN_TIME_H)
+#define __MDFN_TIME_H
 
 namespace Mednafen
 {
@@ -45,9 +47,4 @@ namespace Time
 }
 
 }
-#endif // __MDFN_TIME_H
-
-#else
-// ── C : forward to system <time.h> ──────────────────────────────────────────
-#include_next <time.h>
 #endif
