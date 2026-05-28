@@ -1,5 +1,25 @@
 cmake_minimum_required(VERSION 3.16)
-project(mednafen_stv VERSION 1.32.1 LANGUAGES C CXX)
+
+find_package(Git QUIET)
+if(Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE GIT_RESULT
+    )
+    if(GIT_RESULT EQUAL 0)
+        string(REGEX REPLACE "^v" "" GIT_VERSION "${GIT_TAG}")
+    else()
+        set(GIT_VERSION "0.0.0")
+    endif()
+else()
+    set(GIT_VERSION "0.0.0")
+endif()
+
+project(mednafen_stv VERSION ${GIT_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +32,7 @@ add_compile_options(
 )
 
 if(NOT DEFINED LIBRETRO_CORE_VERSION)
-    set(LIBRETRO_CORE_VERSION "1.2.1")
+    set(LIBRETRO_CORE_VERSION "${GIT_VERSION}")
 endif()
 
 add_compile_definitions(
