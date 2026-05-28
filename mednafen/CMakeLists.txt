@@ -51,10 +51,12 @@ add_library(mdfn_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/trio.c
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/trionan.c
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/triostr.c
-    # POSIX-specific implementations
+    # Platform-specific implementations
     ${CMAKE_CURRENT_SOURCE_DIR}/net/Net.cpp
     $<IF:$<BOOL:${WIN32}>,${CMAKE_CURRENT_SOURCE_DIR}/net/Net_WS2.cpp,${CMAKE_CURRENT_SOURCE_DIR}/net/Net_POSIX.cpp>
     $<IF:$<BOOL:${WIN32}>,${CMAKE_CURRENT_SOURCE_DIR}/mthreading/MThreading_Win32.cpp,${CMAKE_CURRENT_SOURCE_DIR}/mthreading/MThreading_POSIX.cpp>
+    $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_SOURCE_DIR}/win32-common.cpp>
+    $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_SOURCE_DIR}/time/Time_Win32.cpp>
     # Stubs for excluded decoders
     ${CMAKE_CURRENT_SOURCE_DIR}/cdrom/CDAFReader_stubs.cpp
     # All C++ sources
