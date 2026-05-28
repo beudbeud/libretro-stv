@@ -78,11 +78,13 @@ static std::string sys_dir, save_dir;
 static bool        g_stv_skip_bios        = false;
 static bool        g_bios_state_saved     = false;
 static bool        g_bios_intback_resaved = false;
+static bool        g_bios_service_entered = false;
 static std::string g_bios_state_path;
 static int         g_bios_total_frames    = 0;
 /* Strategy: save once at BIOS_SKIP_FALLBACK_FRAMES (900 frames / 15 s),
  * then overwrite once if SMPC INTBACK fires (games that call INTBACK
- * during attract or first input poll get a fresher game-start state). */
+ * during attract or first input poll get a fresher game-start state).
+ * No save is ever written if the operator entered test/service mode. */
 static const int   BIOS_SKIP_FALLBACK_FRAMES = 1080; /* 18 s at 60 fps */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
@@ -666,6 +668,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
     g_bios_state_saved        = false;
     g_bios_intback_resaved    = false;
+    g_bios_service_entered    = false;
     g_bios_state_path.clear();
     g_bios_total_frames       = 0;
     if(g_stv_skip_bios) {
@@ -855,6 +858,7 @@ RETRO_API void retro_unload_game(void)
     g_frameskip_counter = 0;
     g_bios_state_saved        = false;
     g_bios_intback_resaved    = false;
+    g_bios_service_entered    = false;
     g_bios_state_path.clear();
 }
 
@@ -931,9 +935,14 @@ RETRO_API void retro_run(void)
        && !(g_bios_state_saved && g_bios_intback_resaved)) {
         const uint32_t intback = MDFN_IEN_SS::SS_GetINTBACKCount();
 
+        if(builtin_ptr && (builtin_ptr[0] & ((1 << 2) | (1 << 3))))
+            g_bios_service_entered = true;
+
         g_bios_total_frames++;
 
-        if(!g_bios_state_saved && g_bios_total_frames >= BIOS_SKIP_FALLBACK_FRAMES) {
+        if(g_bios_service_entered) {
+            /* Never capture a state taken from inside the service/test menu. */
+        } else if(!g_bios_state_saved && g_bios_total_frames >= BIOS_SKIP_FALLBACK_FRAMES) {
             try {
                 Mednafen::FileStream st(g_bios_state_path, Mednafen::FileStream::MODE_WRITE);
                 MDFNSS_SaveSM(&st, false, nullptr, nullptr, nullptr);
