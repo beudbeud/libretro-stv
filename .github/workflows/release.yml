@@ -19,6 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-${{ matrix.arch }}
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -27,7 +31,9 @@ jobs:
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
-            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }}
+            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel $(nproc)
 
       - name: Rename artifact
@@ -39,6 +45,52 @@ jobs:
         with:
           name: mednafen_stv_libretro_linux_${{ matrix.arch }}
           path: mednafen_stv_libretro_linux_${{ matrix.arch }}.so
+
+  build-windows:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-ccache
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-x86_64
+          variant: ccache
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja \
+            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel $(nproc)
+
+      - name: Rename artifact
+        shell: msys2 {0}
+        run: |
+          cp build/libretro/mednafen_stv_libretro.dll \
+             mednafen_stv_libretro_windows_${{ matrix.arch }}.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mednafen_stv_libretro_windows_${{ matrix.arch }}
+          path: mednafen_stv_libretro_windows_${{ matrix.arch }}.dll
 
   build-android:
     strategy:
@@ -52,11 +104,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-${{ matrix.abi }}-ndk${{ env.ANDROID_NDK_VERSION }}
+          max-size: 1G
+
       - name: Build
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
         run: |
           make -f libretro/Makefile.libretro \
                platform=${{ matrix.platform }} \
                CORE_VERSION=${{ github.ref_name }} \
+               CCACHE_BIN=ccache \
                -j$(nproc)
 
       - name: Rename artifact
@@ -70,7 +130,7 @@ jobs:
           path: mednafen_stv_libretro_android_${{ matrix.abi }}.so
 
   upload:
-    needs: [build, build-android]
+    needs: [build, build-windows, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,4 +152,5 @@ jobs:
         with:
           files: |
             mednafen_stv_libretro_*.so
+            mednafen_stv_libretro_*.dll
             mednafen_stv_libretro.info

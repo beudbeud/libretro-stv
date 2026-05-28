@@ -169,7 +169,12 @@
 #define SIZEOF_CHAR         1
 #define SIZEOF_SHORT        2
 #define SIZEOF_INT          4
-#define SIZEOF_LONG         8
+/* Windows is LLP64: sizeof(long)==4; Linux/macOS are LP64: sizeof(long)==8 */
+#ifdef _WIN32
+# define SIZEOF_LONG        4
+#else
+# define SIZEOF_LONG        8
+#endif
 #define SIZEOF_LONG_LONG    8
 #define SIZEOF_OFF_T        8
 #define SIZEOF_PTRDIFF_T    8

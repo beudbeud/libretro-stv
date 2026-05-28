@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-${{ matrix.arch }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libzstd-dev
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel $(nproc)
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-ccache
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-x86_64
+          variant: ccache
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel $(nproc)
+
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-arm64-ndk${{ env.ANDROID_NDK_VERSION }}
+          max-size: 1G
+
+      - name: Build
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
+        run: |
+          make -f libretro/Makefile.libretro \
+               platform=android-arm64 \
+               CCACHE_BIN=ccache \
+               -j$(nproc)

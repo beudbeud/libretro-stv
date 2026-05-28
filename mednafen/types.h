@@ -350,4 +350,5 @@ template<typename T> static INLINE typename std::remove_all_extents<T>::type* MD
 
 #endif
 
+#define __MDFN_TYPES_H_COMPLETE 1
 #endif
