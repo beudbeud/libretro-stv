@@ -113,7 +113,12 @@
 #define HAVE_STRNDUP            1
 #define HAVE_STRUPR             0
 #define HAVE_STRLCPY            0
-#define HAVE_PTHREAD_SETNAME_NP 1
+/* macOS lacks pthread_condattr_setclock; use pthread_cond_timedwait_relative_np instead.
+ * PTSNW() handles all pthread_setname_np signature variants including macOS single-arg form. */
+#ifdef __APPLE__
+# define HAVE_PTHREAD_COND_TIMEDWAIT_RELATIVE_NP 1
+#endif
+#define HAVE_PTHREAD_SETNAME_NP  1
 #define HAVE_PTHREAD_SET_NAME_NP 0
 
 /* ── Compiler builtins ───────────────────────────────────────────────────── */
