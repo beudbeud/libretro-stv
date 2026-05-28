@@ -53,8 +53,8 @@ add_library(mdfn_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/trio/triostr.c
     # POSIX-specific implementations
     ${CMAKE_CURRENT_SOURCE_DIR}/net/Net.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/net/Net_POSIX.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/mthreading/MThreading_POSIX.cpp
+    $<IF:$<BOOL:${WIN32}>,${CMAKE_CURRENT_SOURCE_DIR}/net/Net_WS2.cpp,${CMAKE_CURRENT_SOURCE_DIR}/net/Net_POSIX.cpp>
+    $<IF:$<BOOL:${WIN32}>,${CMAKE_CURRENT_SOURCE_DIR}/mthreading/MThreading_Win32.cpp,${CMAKE_CURRENT_SOURCE_DIR}/mthreading/MThreading_POSIX.cpp>
     # Stubs for excluded decoders
     ${CMAKE_CURRENT_SOURCE_DIR}/cdrom/CDAFReader_stubs.cpp
     # All C++ sources
@@ -107,4 +107,5 @@ target_link_libraries(mdfn_core PUBLIC
     ZLIB::ZLIB
     Threads::Threads
     ${ZSTD_LIB}
+    $<$<BOOL:${WIN32}>:ws2_32>
 )
