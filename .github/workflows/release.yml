@@ -92,6 +92,43 @@ jobs:
           name: mednafen_stv_libretro_windows_${{ matrix.arch }}
           path: mednafen_stv_libretro_windows_${{ matrix.arch }}.dll
 
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-${{ matrix.arch }}
+
+      - name: Install dependencies
+        run: brew install cmake zstd
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DLIBRETRO_CORE_VERSION=${{ github.ref_name }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Rename artifact
+        run: |
+          cp build/libretro/mednafen_stv_libretro.dylib \
+             mednafen_stv_libretro_macos_${{ matrix.arch }}.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mednafen_stv_libretro_macos_${{ matrix.arch }}
+          path: mednafen_stv_libretro_macos_${{ matrix.arch }}.dylib
+
   build-android:
     strategy:
       matrix:
@@ -130,7 +167,7 @@ jobs:
           path: mednafen_stv_libretro_android_${{ matrix.abi }}.so
 
   upload:
-    needs: [build, build-windows, build-android]
+    needs: [build, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,4 +190,5 @@ jobs:
           files: |
             mednafen_stv_libretro_*.so
             mednafen_stv_libretro_*.dll
+            mednafen_stv_libretro_*.dylib
             mednafen_stv_libretro.info

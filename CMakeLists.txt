@@ -27,9 +27,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(
     -fsigned-char -fwrapv -fexceptions
     -fno-fast-math -fno-unsafe-math-optimizations
-    -fno-aggressive-loop-optimizations -fno-ipa-icf
-    -fno-printf-return-value -fstrict-aliasing
+    -fstrict-aliasing
 )
+
+# GCC-only flags — not supported by Clang/AppleClang
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(
+        -fno-aggressive-loop-optimizations
+        -fno-ipa-icf
+        -fno-printf-return-value
+    )
+endif()
 
 if(NOT DEFINED LIBRETRO_CORE_VERSION)
     set(LIBRETRO_CORE_VERSION "${GIT_VERSION}")
