@@ -71,9 +71,12 @@ jobs:
 
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: android-arm64
+          key: android-arm64-ndk${{ env.ANDROID_NDK_VERSION }}
+          max-size: 1G
 
       - name: Build
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
         run: |
           make -f libretro/Makefile.libretro \
                platform=android-arm64 \
