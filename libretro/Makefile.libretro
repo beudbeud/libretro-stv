@@ -52,6 +52,12 @@ else
    $(error Unknown platform "$(platform)")
 endif
 
+CCACHE_BIN ?=
+ifneq ($(CCACHE_BIN),)
+   CC  := $(CCACHE_BIN) $(CC)
+   CXX := $(CCACHE_BIN) $(CXX)
+endif
+
 $(shell mkdir -p $(BUILD_DIR))
 $(shell cp $(CORE_DIR)/libretro/config_libretro.h $(BUILD_DIR)/config.h)
 

@@ -114,7 +114,7 @@ jobs:
           make -f libretro/Makefile.libretro \
                platform=${{ matrix.platform }} \
                CORE_VERSION=${{ github.ref_name }} \
-               CC="ccache $CC" CXX="ccache $CXX" \
+               CCACHE_BIN=ccache \
                -j$(nproc)
 
       - name: Rename artifact

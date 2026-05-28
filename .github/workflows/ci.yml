@@ -78,5 +78,5 @@ jobs:
         run: |
           make -f libretro/Makefile.libretro \
                platform=android-arm64 \
-               CC="ccache $CC" CXX="ccache $CXX" \
+               CCACHE_BIN=ccache \
                -j$(nproc)
