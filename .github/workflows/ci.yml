@@ -49,7 +49,6 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-zstd
             mingw-w64-x86_64-ccache
-            make
 
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -59,7 +58,7 @@ jobs:
       - name: Build
         shell: msys2 {0}
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -G "MinGW Makefiles" \
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel $(nproc)
