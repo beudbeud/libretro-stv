@@ -935,8 +935,10 @@ RETRO_API void retro_run(void)
        && !(g_bios_state_saved && g_bios_intback_resaved)) {
         const uint32_t intback = MDFN_IEN_SS::SS_GetINTBACKCount();
 
-        if(builtin_ptr && (builtin_ptr[0] & ((1 << 2) | (1 << 3))))
+        if(builtin_ptr && (builtin_ptr[0] & ((1 << 2) | (1 << 3))) && !g_bios_service_entered) {
             g_bios_service_entered = true;
+            lr_log(RETRO_LOG_INFO, "[skip_bios] service/test mode entered — BIOS state capture disabled\n");
+        }
 
         g_bios_total_frames++;
 
