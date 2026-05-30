@@ -33,6 +33,7 @@ uint16 Read16_DB(uint32 A) MDFN_HOT;
 
 void Init(const bool IsPAL, const uint64 affinity) MDFN_COLD;
 void SetGetVideoParams(MDFNGI* gi, const bool caspect, const int sls, const int sle, const bool show_h_overscan, const bool dohblend) MDFN_COLD;
+void GetContentArea(int* y_start, int* height); // current TVMD V-res active content area within framebuffer
 void Kill(void) MDFN_COLD;
 void StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_COLD;
 

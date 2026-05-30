@@ -925,6 +925,20 @@ void Kill(void)
  VDP2REND_Kill();
 }
 
+// Returns the framebuffer region (Y range) containing actual game content for
+// the current TVMD VRES/PAL setting. Top/bottom border lines fall outside this
+// region. Used by the libretro frontend to apply a dynamic display crop that
+// follows the game's chosen vertical resolution (224/240/256-line modes).
+void GetContentArea(int* y_start, int* height)
+{
+ const int active_end    = VTimings[PAL][VRes][VPHASE_ACTIVE];
+ const int top_blank_end = VTimings[PAL][VRes][VPHASE_TOP_BLANKING];
+ const int frame_total   = VTimings[PAL][VRes][VPHASE__COUNT - 1];
+
+ *y_start = frame_total - top_blank_end; // top border line count, positioned at framebuffer row 0
+ *height  = active_end;
+}
+
 //
 // TODO: Check reset versus power on values.
 //

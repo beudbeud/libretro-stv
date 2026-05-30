@@ -989,10 +989,24 @@ RETRO_API void retro_run(void)
     } else {
         const MDFN_Rect &dr = espec.DisplayRect;
         int dw = dr.w, dh = dr.h;
+        int dy = dr.y;
+
+        /* The user's slstart/slend (default 8..231) is a 224-line NTSC safe-area
+         * crop. When the game switches VDP2 to 240-line mode (e.g. Puyo Puyo
+         * Sun) content fills rows 0..239 without borders, so the same window
+         * loses 8 pixels top and bottom. For any non-224-NTSC mode (240/256, or
+         * PAL), follow the game's actual content area instead. */
+        int content_y, content_h;
+        MDFN_IEN_SS::VDP2::GetContentArea(&content_y, &content_h);
+        if(content_y != 8 || content_h != 224) {
+            dy = content_y;
+            dh = content_h;
+        }
+
         /* Saturn: per-scanline widths */
-        if(dh > 0 && line_widths[dr.y] != (int32)~0) {
+        if(dh > 0 && line_widths[dy] != (int32)~0) {
             int mx = 0;
-            for(int y=dr.y; y<dr.y+dh; y++) if(line_widths[y]>mx) mx=line_widths[y];
+            for(int y=dy; y<dy+dh; y++) if(line_widths[y]>mx) mx=line_widths[y];
             if(mx > 0) dw = mx;
         }
         if(dw<=0) dw=320; if(dh<=0) dh=240;
@@ -1025,7 +1039,7 @@ RETRO_API void retro_run(void)
         }
 
         const uint32_t *px = reinterpret_cast<const uint32_t*>(surf->pixels)
-            + (uint64_t)dr.y * surf->pitchinpix + dr.x;
+            + (uint64_t)dy * surf->pitchinpix + dr.x;
         /* For interlaced frames, we pass the full dh so RA can deinterlace.
          * The pitch stays the same (full framebuffer row stride).            */
         video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
