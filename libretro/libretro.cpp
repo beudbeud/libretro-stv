@@ -57,6 +57,53 @@ static bool     initialized      = false;
 static size_t   s_serialize_size = 0;
 
 static constexpr int FB_W = 704, FB_H = 512;
+
+/* Display Rotation core option (libretro SET_ROTATION units):
+ * -1 = Auto (follow the game database), else 0/1/2/3 = 0°/90°/180°/270° CCW. */
+static int g_rotation_opt = -1;
+
+/* Effective frontend rotation in libretro SET_ROTATION units (0..3, ×90° CCW).
+ * Auto follows the game database (game_info->rotated): horizontal (yoko) games
+ * report 0 (no rotation), vertical (TATE) games report 90° so they display
+ * upright on a horizontal screen. An explicit value forces that absolute
+ * rotation for every game (e.g. "0" = no rotation for a physical TATE screen). */
+static unsigned effective_rotation(void)
+{
+    if(g_rotation_opt >= 0) return (unsigned)g_rotation_opt;      /* forced absolute */
+    return game_info ? ((unsigned)game_info->rotated & 3u) : 0u;  /* Auto: game database */
+}
+
+/* 90°/270° rotations swap the displayed width/height (and invert aspect). */
+static bool rotation_swaps_axes(void)
+{
+    return (effective_rotation() & 1u) != 0u;
+}
+
+/* Report the effective frontend rotation to the frontend. */
+static void send_rotation(void)
+{
+    unsigned rot = effective_rotation();
+    environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rot);
+}
+
+/* Build a retro_game_geometry for an unrotated content size (w x h). When the
+ * effective rotation is 90°/270° the displayed image is portrait: swap the
+ * reported dimensions and invert the aspect ratio (3:4) so the rotated output
+ * keeps correct proportions rather than being stretched into a 4:3 box. */
+static retro_game_geometry make_geometry(int w, int h)
+{
+    retro_game_geometry geo = {};
+    if(rotation_swaps_axes()) {
+        geo.base_width   = h;  geo.base_height = w;
+        geo.max_width    = FB_H; geo.max_height = w;
+        geo.aspect_ratio = 3.f / 4.f;
+    } else {
+        geo.base_width   = w;  geo.base_height = h;
+        geo.max_width    = FB_W; geo.max_height = h;
+        geo.aspect_ratio = 4.f / 3.f;
+    }
+    return geo;
+}
 static MDFN_Surface *surf       = nullptr;
 static int32        *line_widths = nullptr;
 
@@ -343,6 +390,13 @@ static retro_core_option_v2_definition s_opts[] = {
       { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend", "Last Scanline (NTSC)", NULL, NULL, NULL, "video",
       { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+    { "mednafen_stv_rotation", "Display Rotation", NULL,
+      "Frontend display rotation. 'Auto' follows the game database: horizontal "
+      "(yoko) games are not rotated, vertical (TATE) games are rotated 90° so they "
+      "display upright on a horizontal screen, without stretching. Force a fixed "
+      "value for special setups: '0' = no rotation (e.g. a physically-rotated TATE "
+      "screen), '90'/'180'/'270' apply that absolute rotation to every game.", NULL, "video",
+      { {"auto","Auto (game database)"},{"0","0 degrees (native orientation)"},{"90","90 degrees"},{"180","180 degrees"},{"270","270 degrees"},{NULL,NULL} }, "auto" },
 
     /* ── Performance ── */
     { "mednafen_stv_frameskip", "Frameskip", NULL,
@@ -384,6 +438,8 @@ static retro_core_option_definition s_opts_v1[] = {
       NULL, { {"0","0"},{"2","2"},{"4","4"},{"8","8"},{NULL,NULL} }, "8" },
     { "mednafen_stv_slend",            "Last Scanline (NTSC)",
       NULL, { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
+    { "mednafen_stv_rotation",         "Display Rotation",
+      NULL, { {"auto","Auto (game database)"},{"0","0 degrees (native orientation)"},{"90","90 degrees"},{"180","180 degrees"},{"270","270 degrees"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_frameskip",        "Frameskip",
       NULL, { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_cpu_cache",        "CPU Cache Emulation",
@@ -505,6 +561,19 @@ STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
             g_prev_interlaced = false; /* force ClearState on next interlaced frame */
         }
     }
+
+    /* Display Rotation: -1 = Auto (game database), else 0/1/2/3 SET_ROTATION
+     * units. effective_rotation() interprets these; the matching SET_ROTATION /
+     * SET_GEOMETRY updates are driven from retro_run() (and retro_load_game /
+     * retro_get_system_av_info). */
+    var.key = "mednafen_stv_rotation";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if      (!strcmp(var.value, "auto")) g_rotation_opt = -1;
+        else if (!strcmp(var.value, "90"))   g_rotation_opt = 1;
+        else if (!strcmp(var.value, "180"))  g_rotation_opt = 2;
+        else if (!strcmp(var.value, "270"))  g_rotation_opt = 3;
+        else                                 g_rotation_opt = 0; /* "0" */
+    }
 }
 
 /* ── API ───────────────────────────────────────────────────────────────────── */
@@ -578,11 +647,10 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
      * instead of 240/448 = 0.535 that MAME gets with its 224-line geometry. */
     int nom_w = game_info ? game_info->nominal_width  : 320;
     int nom_h = game_info ? game_info->nominal_height : 224;
-    info->geometry.base_width   = nom_w;
-    info->geometry.base_height  = nom_h;
-    info->geometry.max_width    = FB_W;   /* framebuffer width (required for Saturn variable H-res) */
-    info->geometry.max_height   = nom_h;  /* = base_height: SwitchRes uses this for fractal Y calc */
-    info->geometry.aspect_ratio = 4.0f / 3.0f;
+    /* make_geometry applies the effective rotation: 90°/270° swap the reported
+     * dimensions and invert the aspect ratio. max_height = base_height (not
+     * FB_H) keeps SwitchRes's fractal Y calc correct. */
+    info->geometry = make_geometry(nom_w, nom_h);
     info->timing.fps            = game_info
         ? (double)game_info->fps / (65536.0 * 256.0) : 59.826;
     info->timing.sample_rate    = 44100.0;
@@ -783,12 +851,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
     }
 
-    /* Signal display rotation. tate_mode=enabled → game_info->rotated=MDFN_ROTATE90 → rotation 1.
-     * tate_mode=disabled (default) → rotation 0, overriding any frontend auto-detect. */
-    {
-        unsigned rot = (game_info->rotated != 0) ? 1u : 0u;
-        environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rot);
-    }
+    /* Signal display rotation from the Display Rotation option (see
+     * effective_rotation): Auto follows the game database, an explicit value
+     * forces an absolute rotation. Re-sent from retro_run() if it changes. */
+    send_rotation();
 
     /* Memory map — exposes Saturn bus regions so RetroArch's NCI
      * READ_CORE_MEMORY / RetroAchievements can inspect them.
@@ -870,18 +936,11 @@ RETRO_API void retro_run(void)
     bool opts = false;
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE,&opts) && opts) {
         apply_options();
-        /* Also update geometry on option change (like Beetle PCE Fast) */
+        /* The Rotation core option may have changed: re-send rotation and
+         * geometry (like Beetle PCE Fast) so it takes effect without a restart. */
+        send_rotation();
         if(g_last_w > 0) {
-            bool is_tate = game_info && (game_info->rotated != 0);
-            retro_game_geometry geo={};
-            if(is_tate) {
-                geo.base_width=g_last_h; geo.base_height=g_last_w;
-                geo.max_width=FB_H;      geo.max_height=g_last_w;
-            } else {
-                geo.base_width=g_last_w; geo.base_height=g_last_h;
-                geo.max_width=FB_W;      geo.max_height=g_last_h;
-            }
-            geo.aspect_ratio = 4.f/3.f;
+            retro_game_geometry geo = make_geometry(g_last_w, g_last_h);
             environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
         }
     }
@@ -1021,20 +1080,7 @@ RETRO_API void retro_run(void)
         /* Like Beetle PCE Fast: immediate SET_GEOMETRY on resolution change. */
         if(dw != g_last_w || display_h != g_last_h) {
             g_last_w = dw; g_last_h = display_h;
-            bool is_tate = game_info && (game_info->rotated != 0);
-            retro_game_geometry geo={};
-            if(is_tate) {
-                geo.base_width   = display_h;
-                geo.base_height  = dw;
-                geo.max_width    = FB_H;
-                geo.max_height   = dw;
-            } else {
-                geo.base_width   = dw;
-                geo.base_height  = display_h;
-                geo.max_width    = FB_W;
-                geo.max_height   = display_h;
-            }
-            geo.aspect_ratio = 4.f / 3.f;
+            retro_game_geometry geo = make_geometry(dw, display_h);
             environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geo);
         }
 
