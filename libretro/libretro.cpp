@@ -953,12 +953,23 @@ RETRO_API void retro_run(void)
     g_is_fastforwarding = false;
     environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &g_is_fastforwarding);
 
-    /* Frameskip: decide whether to skip rendering this frame */
-    bool skip_frame = false;
-    if(g_frameskip_type == FS_AUTO) {
+    /* Run-ahead / preemptive frames: on throwaway frames the frontend disables
+     * audio and/or video via GET_AUDIO_VIDEO_ENABLE. Honor it every frame,
+     * independent of the Frameskip option, so those frames skip rendering and
+     * don't emit duplicate audio — this is what makes run-ahead efficient when
+     * Frameskip is off (the default). */
+    bool skip_frame    = false;
+    bool audio_enabled = true;
+    {
         int av = ~0;
-        if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av))
-            skip_frame = !(av & 1);
+        if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av)) {
+            skip_frame    = !(av & RETRO_AV_ENABLE_VIDEO);
+            audio_enabled =  (av & RETRO_AV_ENABLE_AUDIO);
+        }
+    }
+
+    /* Frameskip: may additionally skip rendering this frame */
+    if(g_frameskip_type == FS_AUTO) {
         /* The frontend mutes audio while fast-forwarding, so the AV-enable
          * hint above may not fire; render only every other frame instead. */
         if(g_is_fastforwarding && (g_frameskip_counter ^= 1))
@@ -1101,8 +1112,9 @@ RETRO_API void retro_run(void)
         video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
     }
 
-    /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer */
-    if(espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
+    /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer.
+     * Suppress output on throwaway frames (run-ahead) so they don't emit duplicate audio. */
+    if(audio_enabled && espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
         audio_batch_cb(espec.SoundBuf, (size_t)espec.SoundBufSize);
 }
 
