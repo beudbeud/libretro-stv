@@ -136,9 +136,10 @@ static const int   BIOS_SKIP_FALLBACK_FRAMES = 1080; /* 18 s at 60 fps */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
-static int g_frameskip_type     = FS_NONE;
-static int g_frameskip_interval = 1;
-static int g_frameskip_counter  = 0;
+static int  g_frameskip_type     = FS_NONE;
+static int  g_frameskip_interval = 1;
+static int  g_frameskip_counter  = 0;
+static bool g_is_fastforwarding  = false;
 
 /* ── Deinterlacer ──────────────────────────────────────────────────────────── */
 /* Sentinel for "renderer-side bob" (VDP2::SetDeinterlaceOff(true)) — bypasses
@@ -947,12 +948,32 @@ RETRO_API void retro_run(void)
 
     update_input();
 
-    /* Frameskip: decide whether to skip rendering this frame */
-    bool skip_frame = false;
-    if(g_frameskip_type == FS_AUTO) {
+    /* Query the frontend's fast-forward state. In FS_AUTO this lets us drop
+     * frames so fast-forward runs faster without flooding the video driver. */
+    g_is_fastforwarding = false;
+    environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &g_is_fastforwarding);
+
+    /* Run-ahead / preemptive frames: on throwaway frames the frontend disables
+     * audio and/or video via GET_AUDIO_VIDEO_ENABLE. Honor it every frame,
+     * independent of the Frameskip option, so those frames skip rendering and
+     * don't emit duplicate audio — this is what makes run-ahead efficient when
+     * Frameskip is off (the default). */
+    bool skip_frame    = false;
+    bool audio_enabled = true;
+    {
         int av = ~0;
-        if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av))
-            skip_frame = !(av & 1);
+        if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av)) {
+            skip_frame    = !(av & RETRO_AV_ENABLE_VIDEO);
+            audio_enabled =  (av & RETRO_AV_ENABLE_AUDIO);
+        }
+    }
+
+    /* Frameskip: may additionally skip rendering this frame */
+    if(g_frameskip_type == FS_AUTO) {
+        /* The frontend mutes audio while fast-forwarding, so the AV-enable
+         * hint above may not fire; render only every other frame instead. */
+        if(g_is_fastforwarding && (g_frameskip_counter ^= 1))
+            skip_frame = true;
     } else if(g_frameskip_type == FS_MANUAL) {
         if(g_frameskip_counter == 0) {
             g_frameskip_counter = g_frameskip_interval;
@@ -1091,8 +1112,9 @@ RETRO_API void retro_run(void)
         video_cb(px, dw, dh, surf->pitchinpix * sizeof(uint32_t));
     }
 
-    /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer */
-    if(espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
+    /* Use espec.SoundBuf not audio_buf: mednafen may redirect to its internal buffer.
+     * Suppress output on throwaway frames (run-ahead) so they don't emit duplicate audio. */
+    if(audio_enabled && espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
         audio_batch_cb(espec.SoundBuf, (size_t)espec.SoundBufSize);
 }
 
