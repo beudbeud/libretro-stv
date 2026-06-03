@@ -136,9 +136,10 @@ static const int   BIOS_SKIP_FALLBACK_FRAMES = 1080; /* 18 s at 60 fps */
 
 /* ── Frameskip ─────────────────────────────────────────────────────────────── */
 enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
-static int g_frameskip_type     = FS_NONE;
-static int g_frameskip_interval = 1;
-static int g_frameskip_counter  = 0;
+static int  g_frameskip_type     = FS_NONE;
+static int  g_frameskip_interval = 1;
+static int  g_frameskip_counter  = 0;
+static bool g_is_fastforwarding  = false;
 
 /* ── Deinterlacer ──────────────────────────────────────────────────────────── */
 /* Sentinel for "renderer-side bob" (VDP2::SetDeinterlaceOff(true)) — bypasses
@@ -947,12 +948,21 @@ RETRO_API void retro_run(void)
 
     update_input();
 
+    /* Query the frontend's fast-forward state. In FS_AUTO this lets us drop
+     * frames so fast-forward runs faster without flooding the video driver. */
+    g_is_fastforwarding = false;
+    environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &g_is_fastforwarding);
+
     /* Frameskip: decide whether to skip rendering this frame */
     bool skip_frame = false;
     if(g_frameskip_type == FS_AUTO) {
         int av = ~0;
         if(environ_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av))
             skip_frame = !(av & 1);
+        /* The frontend mutes audio while fast-forwarding, so the AV-enable
+         * hint above may not fire; render only every other frame instead. */
+        if(g_is_fastforwarding && (g_frameskip_counter ^= 1))
+            skip_frame = true;
     } else if(g_frameskip_type == FS_MANUAL) {
         if(g_frameskip_counter == 0) {
             g_frameskip_counter = g_frameskip_interval;
