@@ -62,7 +62,7 @@ Individual files in the RetroArch system directory, **or** a single `stvbios.zip
 | File | Region | SHA-256 |
 |------|--------|---------|
 | `epr-20091.ic8` | Japan | `ac778ec04aaa4df296d30743536da3de31281f8ae5c94d7be433dcc84e25d85b` |
-| `epr-19854.ic8` | Asia / Taiwan | — |
+| `epr-19854.ic8` | Asia / Taiwan | `a2a13f306c1ce85dc5751ab1210697f9f331f384bcd18662ff85f30c6c41b97b` |
 | `epr-17952a.ic8` | North America | `bac5a52794cf424271f073df228e0b0eb042dede6a3b829eb49abf155e7e0137` |
 | `epr-17954a.ic8` | Europe | `3e6f91506031badc4ebdf7fe5b4f33180222a369b575522861688d3b27322a68` |
 
@@ -122,7 +122,7 @@ Works with mouse (desktop), touchscreen (Android / mobile), or any pointer devic
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `mednafen_stv_region` | `auto` | BIOS region: Auto / Japan / North America / Europe |
+| `mednafen_stv_region` | `auto` | BIOS region: Auto / Japan / North America / Europe / Asia |
 | `mednafen_stv_cart` | `auto` | Expansion cart: Auto / None / Backup RAM / 4M RAM / 8M RAM |
 | `mednafen_stv_skip_bios` | `disabled` | Skip BIOS boot animation. Restart required. |
 | `mednafen_stv_autortc` | `enabled` | Auto-set Real Time Clock from host |

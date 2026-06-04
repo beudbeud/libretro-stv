@@ -358,7 +358,7 @@ static retro_core_option_v2_category s_cats[] = {
 static retro_core_option_v2_definition s_opts[] = {
     /* ── System ── */
     { "mednafen_stv_region", "Region", NULL, NULL, NULL, "system",
-      { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+      { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"tw","Asia"},{"auto","Auto"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_cart", "Expansion Cart", NULL, NULL, NULL, "system",
       { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_skip_bios", "Skip BIOS", NULL,
@@ -414,7 +414,7 @@ static retro_core_options_v2 s_opts_v2 = { s_cats, s_opts };
 /* v1 fallback — same options without category_key field */
 static retro_core_option_definition s_opts_v1[] = {
     { "mednafen_stv_region",           "Region",
-      NULL, { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"auto","Auto"},{NULL,NULL} }, "auto" },
+      NULL, { {"jp","Japan"},{"na","North America"},{"eu","Europe"},{"tw","Asia"},{"auto","Auto"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_cart",             "Expansion Cart",
       NULL, { {"auto","Auto"},{"none","None"},{"backup","Backup RAM"},{"4mram","4M RAM"},{"8mram","8M RAM"},{NULL,NULL} }, "auto" },
     { "mednafen_stv_skip_bios",        "Skip BIOS",
@@ -594,7 +594,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
         cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS, s_opts_v1);
     else {
         static const retro_variable legacy[] = {
-            {"mednafen_stv_region",           "Region; jp|na|eu|auto"},
+            {"mednafen_stv_region",           "Region; jp|na|eu|tw|auto"},
             {"mednafen_stv_cart",             "Expansion Cart; auto|none|backup|4mram|8mram"},
             {"mednafen_stv_skip_bios",        "Skip BIOS; disabled|enabled"},
             {"mednafen_stv_autortc",          "Auto-set RTC; enabled|disabled"},
