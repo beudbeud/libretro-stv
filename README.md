@@ -98,7 +98,7 @@ Action buttons are mapped ergonomically to face buttons:
 
 Coin insertion uses edge detection (one press = one coin).
 
-Tate (vertical cabinet) games are detected automatically from the game database and reported to the frontend via `SET_ROTATION` — no manual option required.
+Tate (vertical cabinet) games are detected automatically from the game database and reported to the frontend via `SET_ROTATION`. The `mednafen_stv_rotation` option overrides this for special setups (e.g. a physically-rotated screen).
 
 ### Touchscreen (Critter Crusher)
 
@@ -145,6 +145,7 @@ Works with mouse (desktop), touchscreen (Android / mobile), or any pointer devic
 | `mednafen_stv_deinterlacer` | `blend` | 480i handling: Blend (smooth, recommended) / Off (renderer bob) / Weave / Bob / Bob with offset / Blend gamma-correct |
 | `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0 / 2 / 4 / 8) |
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
+| `mednafen_stv_rotation` | `auto` | Display rotation. `auto` follows the game database (TATE games rotated 90°, yoko games unrotated). Force `0` / `90` / `180` / `270` for special setups (e.g. `0` on a physically-rotated screen). |
 
 ### Performance
 
