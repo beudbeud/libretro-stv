@@ -19,7 +19,16 @@ else()
     set(GIT_VERSION "0.0.0")
 endif()
 
-project(mednafen_stv VERSION ${GIT_VERSION} LANGUAGES C CXX)
+# project(VERSION ...) only accepts numeric major[.minor[.patch[.tweak]]].
+# Tags like "10.1-patron-1-alpha-8" carry extra labels, so extract the
+# leading numeric portion for project() and keep the full tag for display.
+if(GIT_VERSION MATCHES "^([0-9]+(\\.[0-9]+)*)")
+    set(GIT_VERSION_NUMERIC "${CMAKE_MATCH_1}")
+else()
+    set(GIT_VERSION_NUMERIC "0.0.0")
+endif()
+
+project(mednafen_stv VERSION ${GIT_VERSION_NUMERIC} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
