@@ -147,6 +147,12 @@ Works with mouse (desktop), touchscreen (Android / mobile), or any pointer devic
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
 | `mednafen_stv_rotation` | `auto` | Display rotation. `auto` follows the game database (TATE games rotated 90°, yoko games unrotated). Force `0` / `90` / `180` / `270` for special setups (e.g. `0` on a physically-rotated screen). |
 
+### Audio
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mednafen_stv_volume` | `100` | Output volume (50–200%). `100` is unchanged; raise it for quiet titles. Above 100% may clip on loud scenes. Applied live, no restart. |
+
 ### Performance
 
 | Option | Default | Description |
