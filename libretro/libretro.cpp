@@ -62,6 +62,10 @@ static constexpr int FB_W = 704, FB_H = 512;
  * -1 = Auto (follow the game database), else 0/1/2/3 = 0°/90°/180°/270° CCW. */
 static int g_rotation_opt = -1;
 
+/* Audio output volume multiplier passed to Mednafen's espec.SoundVolume.
+ * 1.0 = unchanged; <1 attenuates, >1 amplifies (Mednafen clamps internally). */
+static float g_sound_volume = 1.0f;
+
 /* Effective frontend rotation in libretro SET_ROTATION units (0..3, ×90° CCW).
  * Auto follows the game database (game_info->rotated): horizontal (yoko) games
  * report 0 (no rotation), vertical (TATE) games report 90° so they display
@@ -351,6 +355,7 @@ static retro_core_option_v2_category s_cats[] = {
     { "system",      "System",      NULL },
     { "input",       "Input",       NULL },
     { "video",       "Video",       NULL },
+    { "audio",       "Audio",       NULL },
     { "performance", "Performance", NULL },
     { NULL, NULL, NULL }
 };
@@ -399,6 +404,11 @@ static retro_core_option_v2_definition s_opts[] = {
       "screen), '90'/'180'/'270' apply that absolute rotation to every game.", NULL, "video",
       { {"auto","Auto (game database)"},{"0","0 degrees (native orientation)"},{"90","90 degrees"},{"180","180 degrees"},{"270","270 degrees"},{NULL,NULL} }, "auto" },
 
+    /* ── Audio ── */
+    { "mednafen_stv_volume", "Audio Volume", NULL,
+      "Output volume as a percentage. 100% is unchanged; lower attenuates, higher amplifies (useful for quiet titles). Above 100% may clip on loud scenes.", NULL, "audio",
+      { {"50","50%"},{"75","75%"},{"100","100%"},{"125","125%"},{"150","150%"},{"175","175%"},{"200","200%"},{NULL,NULL} }, "100" },
+
     /* ── Performance ── */
     { "mednafen_stv_frameskip", "Frameskip", NULL,
       "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
@@ -441,6 +451,8 @@ static retro_core_option_definition s_opts_v1[] = {
       NULL, { {"239","239"},{"234","234"},{"231","231"},{"224","224"},{NULL,NULL} }, "231" },
     { "mednafen_stv_rotation",         "Display Rotation",
       NULL, { {"auto","Auto (game database)"},{"0","0 degrees (native orientation)"},{"90","90 degrees"},{"180","180 degrees"},{"270","270 degrees"},{NULL,NULL} }, "auto" },
+    { "mednafen_stv_volume",           "Audio Volume",
+      NULL, { {"50","50%"},{"75","75%"},{"100","100%"},{"125","125%"},{"150","150%"},{"175","175%"},{"200","200%"},{NULL,NULL} }, "100" },
     { "mednafen_stv_frameskip",        "Frameskip",
       NULL, { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
     { "mednafen_stv_cpu_cache",        "CPU Cache Emulation",
@@ -575,6 +587,15 @@ STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
         else if (!strcmp(var.value, "270"))  g_rotation_opt = 3;
         else                                 g_rotation_opt = 0; /* "0" */
     }
+
+    /* Audio Volume: percentage → multiplier for espec.SoundVolume (applied by
+     * Mednafen during MDFNI_Emulate). Changeable at runtime; no restart needed. */
+    var.key = "mednafen_stv_volume";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        int pct = atoi(var.value);
+        if(pct < 0) pct = 0;
+        g_sound_volume = (float)pct / 100.0f;
+    }
 }
 
 /* ── API ───────────────────────────────────────────────────────────────────── */
@@ -607,6 +628,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
             {"mednafen_stv_deinterlacer",     "Deinterlacer; blend|off|weave|bob|bob_offset|blend_rg"},
             {"mednafen_stv_slstart",          "First Scanline (NTSC); 8|0|2|4"},
             {"mednafen_stv_slend",            "Last Scanline (NTSC); 231|224|234|239"},
+            {"mednafen_stv_volume",           "Audio Volume; 100|50|75|125|150|175|200"},
             {"mednafen_stv_frameskip",        "Frameskip; disabled|auto|1|2|3|4|5"},
             {"mednafen_stv_cpu_cache",        "CPU Cache Emulation; data_cb|full"},
             {NULL, NULL}
@@ -1005,7 +1027,7 @@ RETRO_API void retro_run(void)
     espec.MasterCycles    = 0;
     espec.MasterCycles_InternalProcessed = 0;
     espec.MasterCycles_DriverProcessed   = 0;
-    espec.SoundVolume     = 1.0;
+    espec.SoundVolume     = g_sound_volume;
     espec.soundmultiplier = 1.0;
     espec.NeedRewind      = false;
 
