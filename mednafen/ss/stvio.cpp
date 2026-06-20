@@ -51,6 +51,15 @@ static int32 CoinActiveCounter;
 
 static uint8 HammerX, HammerY;
 
+/* Trackball (PORT-G counter mode). TrackCounter[] are free-running 16-bit
+ * accumulators fed by STVIO_SetTrackball(); the game writes IOGA offset 0x06
+ * with bit7=0 to latch a baseline into TrackBaseline[], then reads the per-axis
+ * delta one byte at a time (selector auto-increments). Mirrors MAME's stv ioga. */
+static uint8  IogaMode;        /* IOGA MODE register (offset 0x0e); bit7 = PORT-G counter mode */
+static uint8  IogaPortG;       /* PORT-G select/latch (offset 0x06): bit0=byte, bits1-2=axis */
+static uint16 TrackCounter[4];
+static uint16 TrackBaseline[4];
+
 static uint8 prev_sctrl;
 static uint8 prev_ectrl;
 static AK93C45 eep;
@@ -79,6 +88,20 @@ void STVIO_SetCrosshairsColor(unsigned port, uint32 color)
 {
  if(!port)
   gun.SetCrosshairsColor(color);
+}
+
+bool STVIO_IsTrackball(void)
+{
+ return ControlScheme == STV_CONTROL_TRACKBALL;
+}
+
+void STVIO_SetTrackball(int dx, int dy)
+{
+ if(ControlScheme != STV_CONTROL_TRACKBALL)
+  return;
+
+ TrackCounter[0] = (uint16)(TrackCounter[0] + dx);
+ TrackCounter[1] = (uint16)(TrackCounter[1] + dy);
 }
 
 void STVIO_TransformInput(void)
@@ -135,6 +158,21 @@ void STVIO_UpdateInput(int32 elapsed_time)
   //
   gun.UpdateInput(tmp_data, elapsed_time);
  }
+ else if(ControlScheme == STV_CONTROL_TRACKBALL)
+ {
+  /* Medal/hopper cabinet (Hashire Patrol Car family). PORTA/PORTB carry
+   * active-high hardware sensors that must read 0 when idle, unlike the
+   * active-low 0xFF default — otherwise the boot self-test fails ("error no 4").
+   * Idle states mirror MAME's patocar input ports. */
+  const uint16 tmp = DPtr[0] ? MDFN_de16lsb(DPtr[0] + 0x0) : 0;
+
+  DataIn[0x0] = 0xFC;  // PORTA: bit0 hopper switch + bit1 hopper line — idle low
+  DataIn[0x1] = 0xFD;  // PORTB: bit1 door switch — idle low
+
+  // PORTC buttons (active low): Select (bit4 START1) ← Start, Power (bit5 BUTTON1) ← RETRO A.
+  if(tmp & 0x0800) DataIn[0x2] &= ~0x10;  // Start  → Select Button
+  if(tmp & 0x0100) DataIn[0x2] &= ~0x20;  // RETRO A → Power Button
+ }
  else
  {
   for(unsigned i = 0; i < 2; i++)
@@ -166,7 +204,7 @@ void STVIO_UpdateInput(int32 elapsed_time)
                   ((tmp >>  7) & 0x02) |  /* RETRO A → bit1 = SW2 */
                   (tmp         & 0x04);   /* RETRO Y → bit2 = SW3 */
 
-     if(ControlScheme != STV_CONTROL_3B)
+     if(ControlScheme == STV_CONTROL_6B)
      {
       /* 6B: SW4←RETRO X, SW5←RETRO L, SW6←RETRO R */
       DataIn[0x5] ^= (
@@ -223,6 +261,14 @@ void STVIO_Reset(bool powering_up)
 
  DataDir = 0xFF;
  memset(DataOut, 0xFF, sizeof(DataOut));
+
+ if(powering_up)
+ {
+  IogaMode = 0;
+  IogaPortG = 0;
+  memset(TrackCounter, 0, sizeof(TrackCounter));
+  memset(TrackBaseline, 0, sizeof(TrackBaseline));
+ }
 }
 
 /*
@@ -389,6 +435,23 @@ void STVIO_WriteIOGA(const sscpu_timestamp_t timestamp, uint8 A, uint8 V)
 {
  //printf("[IOGA] Write: %02x %02x\n", A, V);
 
+ if(ControlScheme == STV_CONTROL_TRACKBALL)
+ {
+  if(A == 0x0E)        // MODE register
+  {
+   IogaMode = V;
+   return;
+  }
+  else if(A == 0x06)   // PORT-G select; bit7=0 latches counter baselines
+  {
+   if(!(V & 0x80))
+    for(unsigned i = 0; i < 4; i++)
+     TrackBaseline[i] = TrackCounter[i];
+   IogaPortG = V;
+   return;
+  }
+ }
+
  if(A < 0x8)
  {
   DataOut[A & 0x7] = V;
@@ -412,6 +475,20 @@ uint8 STVIO_ReadIOGA(const sscpu_timestamp_t timestamp, uint8 A)
 
  //printf("[IOGA] Read: %02x\n", A);
  //assert(A <= 0x8);
+
+ if(ControlScheme == STV_CONTROL_TRACKBALL)
+ {
+  if(A == 0x0E)        // MODE register
+   return IogaMode;
+  else if(A == 0x06 && (IogaMode & 0x80))  // PORT-G counter mode
+  {
+   const unsigned sel   = (IogaPortG >> 1) & 0x03;
+   const uint16   delta = (uint16)(TrackCounter[sel] - TrackBaseline[sel]);
+   ret = (delta >> ((~IogaPortG & 1) * 8)) & 0xFF;
+   IogaPortG = (IogaPortG & 0xF8) | ((IogaPortG + 1) & 0x07); // selector auto-increments per read
+   return ret;
+  }
+ }
 
  if(A == 0x8)
   ret = DataDir;
@@ -445,6 +522,11 @@ void STVIO_StateAction(StateMem* sm, const unsigned load, const bool data_only)
   //
   SFVAR(HammerX),
   SFVAR(HammerY),
+  //
+  SFVAR(IogaMode),
+  SFVAR(IogaPortG),
+  SFVAR(TrackCounter),
+  SFVAR(TrackBaseline),
   //
   SFVAR(prev_sctrl),
   SFVAR(prev_ectrl),

@@ -44,6 +44,11 @@ void STVIO_SetInput(unsigned port, const char* type, uint8* ptr) MDFN_COLD;
 
 void STVIO_SetCrosshairsColor(unsigned port, uint32 color) MDFN_COLD;
 
+/* Trackball (IOGA PORT-G counter mode). Accumulate per-frame relative motion
+ * into the free-running 16-bit X/Y counters read by trackball games. */
+bool STVIO_IsTrackball(void);
+void STVIO_SetTrackball(int dx, int dy);
+
 void STVIO_InsertCoin(void);
 
 IODevice* STVIO_GetSMPCDevice(bool sport) MDFN_COLD;
