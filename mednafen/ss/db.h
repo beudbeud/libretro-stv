@@ -51,7 +51,9 @@ enum
  STV_CONTROL_6B,
  STV_CONTROL_HAMMER,
  //
- STV_CONTROL_RSG
+ STV_CONTROL_RSG,
+ //
+ STV_CONTROL_TRACKBALL  /* IOGA PORT-G counter mode (Hashire Patrol Car family) */
 };
 
 enum

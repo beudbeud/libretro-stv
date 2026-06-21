@@ -697,7 +697,7 @@ static const STVGameInfo STVGI[] =
  {
   "Hashire Patrol Car",
   SMPC_AREA_JP,
-  STV_CONTROL_3B,
+  STV_CONTROL_TRACKBALL,
   STV_EC_CHIP_NONE,
    0x00000000,
   STV_ROMTWIDDLE_NONE,
@@ -820,7 +820,7 @@ static const STVGameInfo STVGI[] =
  {
   "Nerae Super Goal",
   SMPC_AREA_JP,
-  STV_CONTROL_3B,
+  STV_CONTROL_TRACKBALL,
   STV_EC_CHIP_NONE,
    0x00000000,
   STV_ROMTWIDDLE_NONE,
@@ -1096,7 +1096,7 @@ static const STVGameInfo STVGI[] =
  {
   "Sky Challenger",
   SMPC_AREA_JP,
-  STV_CONTROL_3B,
+  STV_CONTROL_TRACKBALL,
   STV_EC_CHIP_NONE,
    0x00000000,
   STV_ROMTWIDDLE_NONE,
@@ -1299,7 +1299,7 @@ static const STVGameInfo STVGI[] =
  {
   "Technical Bowling",
   SMPC_AREA_JP,
-  STV_CONTROL_3B,
+  STV_CONTROL_TRACKBALL,
   STV_EC_CHIP_NONE,
    0x00000000,
   STV_ROMTWIDDLE_NONE,
@@ -1639,16 +1639,25 @@ const STVGameInfo* DB_LookupSTV(const std::string& fname, Stream* s,
 
  //printf("%s 0x%08X\n", fname.c_str(), head_crc32);
 
- /* Pass 1: original behaviour — match against first rom_layout entry */
+ /* Pass 1a: a specific head_crc32 match always wins over a wildcard entry,
+  * regardless of array order. Several games share a first-ROM filename
+  * (e.g. ic22.bin: Choro Q, Wanpaku Safari, Sky Challenger); the wildcard
+  * (head_crc32 == 0) entry must not shadow a later CRC-qualified one. */
  for(const STVGameInfo& e : STVGI)
  {
   auto const& rle = e.rom_layout[0];
 
-  if(!MDFN_strazicmp(fname, rle.fname))
-  {
-   if(!rle.head_crc32 || head_crc32 == rle.head_crc32)
-    return &e;
-  }
+  if(rle.head_crc32 && head_crc32 == rle.head_crc32 && !MDFN_strazicmp(fname, rle.fname))
+   return &e;
+ }
+
+ /* Pass 1b: wildcard fallback — first filename match with no CRC discriminator. */
+ for(const STVGameInfo& e : STVGI)
+ {
+  auto const& rle = e.rom_layout[0];
+
+  if(!rle.head_crc32 && !MDFN_strazicmp(fname, rle.fname))
+   return &e;
  }
 
  /* Pass 2: match against any secondary rom_layout entry.
