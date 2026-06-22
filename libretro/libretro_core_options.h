@@ -50,6 +50,9 @@ static struct retro_core_option_v2_definition option_defs_us[] = {
    { "mednafen_stv_crosshair_color", "Touchscreen Crosshair Color", NULL,
       "Color of the touchscreen crosshair.", NULL, "input",
       { {"white","White"},{"red","Red"},{"green","Green"},{"blue","Blue"},{"yellow","Yellow"},{"cyan","Cyan"},{NULL,NULL} }, "white" },
+   { "mednafen_stv_trackball_sensitivity", "Trackball Analog Stick Sensitivity", NULL,
+      "Roll speed of the left analog stick for trackball games (Hashire Patrol Car, Sky Challenger, Nerae! Super Goal, Technical Bowling). Higher rolls faster at full deflection. Does not affect mouse/real trackball input.", NULL, "input",
+      { {"25","25%"},{"50","50%"},{"75","75%"},{"100","100%"},{"150","150%"},{"200","200%"},{"300","300%"},{"400","400%"},{NULL,NULL} }, "100" },
 
    /* ── Video ── */
    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",
