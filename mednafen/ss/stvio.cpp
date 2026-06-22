@@ -60,6 +60,17 @@ static uint8  IogaPortG;       /* PORT-G select/latch (offset 0x06): bit0=byte, 
 static uint16 TrackCounter[4];
 static uint16 TrackBaseline[4];
 
+/* Medal hopper (Hashire Patrol Car family). The game drives the hopper motor
+ * via IOGA offset 0x03 bit7 (MAME hop_ioga_w) and counts medal-out pulses on
+ * PORTA bit1 (active-high, MAME reads hopper->line_r). While the motor runs we
+ * emulate the dispenser by toggling HopperLine every 100 ms — matching MAME's
+ * HOPPER(..., attotime::from_msec(100)) — so the payout completes instead of
+ * timing out ("error 3"). HopperCounter accumulates microseconds. */
+static bool   HopperMotor;
+static bool   HopperLine;
+static int32  HopperCounter;
+#define STV_HOPPER_PERIOD_US 100000  /* 100 ms half-period */
+
 static uint8 prev_sctrl;
 static uint8 prev_ectrl;
 static AK93C45 eep;
@@ -166,7 +177,25 @@ void STVIO_UpdateInput(int32 elapsed_time)
    * Idle states mirror MAME's patocar input ports. */
   const uint16 tmp = DPtr[0] ? MDFN_de16lsb(DPtr[0] + 0x0) : 0;
 
-  DataIn[0x0] = 0xFC;  // PORTA: bit0 hopper switch + bit1 hopper line — idle low
+  /* Hopper: while the motor runs, toggle the medal-out sensor every 100 ms so
+   * the game counts dispensed medals and the payout completes. Idle (motor off)
+   * the line stays low, otherwise the game flags a jam. */
+  if(HopperMotor)
+  {
+   HopperCounter += elapsed_time;
+   while(HopperCounter >= STV_HOPPER_PERIOD_US)
+   {
+    HopperCounter -= STV_HOPPER_PERIOD_US;
+    HopperLine = !HopperLine;
+   }
+  }
+  else
+  {
+   HopperLine = false;
+   HopperCounter = 0;
+  }
+
+  DataIn[0x0] = 0xFC | (HopperLine ? 0x02 : 0x00);  // PORTA: bit0 hopper switch, bit1 hopper line (active high)
   DataIn[0x1] = 0xFD;  // PORTB: bit1 door switch — idle low
 
   // PORTC buttons (active low): Select (bit4 START1) ← Start, Power (bit5 BUTTON1) ← RETRO A.
@@ -268,6 +297,9 @@ void STVIO_Reset(bool powering_up)
   IogaPortG = 0;
   memset(TrackCounter, 0, sizeof(TrackCounter));
   memset(TrackBaseline, 0, sizeof(TrackBaseline));
+  HopperMotor = false;
+  HopperLine = false;
+  HopperCounter = 0;
  }
 }
 
@@ -437,6 +469,9 @@ void STVIO_WriteIOGA(const sscpu_timestamp_t timestamp, uint8 A, uint8 V)
 
  if(ControlScheme == STV_CONTROL_TRACKBALL)
  {
+  if(A == 0x03)        // PORT-D bit7 → hopper motor (MAME hop_ioga_w); also falls through to DataOut
+   HopperMotor = (V & 0x80);
+
   if(A == 0x0E)        // MODE register
   {
    IogaMode = V;
@@ -527,6 +562,9 @@ void STVIO_StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(IogaPortG),
   SFVAR(TrackCounter),
   SFVAR(TrackBaseline),
+  SFVAR(HopperMotor),
+  SFVAR(HopperLine),
+  SFVAR(HopperCounter),
   //
   SFVAR(prev_sctrl),
   SFVAR(prev_ectrl),
