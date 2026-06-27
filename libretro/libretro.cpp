@@ -126,12 +126,18 @@ static bool g_is_trackball = false;
 /* Scales libretro RETRO_DEVICE_MOUSE relative deltas into trackball counter
  * units. Tunable; the games read deltas modulo 16-bit so only the ratio matters. */
 #define STV_TRACKBALL_SCALE 1
-/* Left-analog-stick → trackball: the stick gives an absolute deflection that we
- * treat as a roll velocity (counter delta per frame). g_trackball_sensitivity is
- * a percentage (100 = default); see the trackball block in retro_run(). */
+/* Analog-stick → trackball: the stick gives an absolute deflection that we treat
+ * as a roll velocity (counter delta per frame). Both stick indices are read since
+ * some pads/autoconfigs report the usable stick on the right index.
+ * g_trackball_sensitivity is a percentage (100 = default); see retro_run(). */
 static int g_trackball_sensitivity = 100;
 #define STV_TRACKBALL_ANALOG_DEADZONE 4096   /* ~12.5% of 32767 */
 #define STV_TRACKBALL_ANALOG_DIV      80000  /* full deflection ≈ 41 counts/frame @100% */
+/* Zero an analog axis value inside the deadzone, pass the rest through. Applied
+ * per-stick before summing so an idle, drifting stick can't bias the other. */
+static inline int stv_analog_deadzone(int v) {
+    return (v > STV_TRACKBALL_ANALOG_DEADZONE || v < -STV_TRACKBALL_ANALOG_DEADZONE) ? v : 0;
+}
 /* gun buffer layout: [nom_x lo, nom_x hi, nom_y lo, nom_y hi, buttons]
  * nom_x ∈ [0, mouse_scale_x ≈ 21472], nom_y ∈ [mouse_offs_y, mouse_offs_y+mouse_scale_y]
  * RETRO_DEVICE_POINTER [-32768,32767] → this space via (ptr+32768)*scale/65536+offs */
@@ -329,17 +335,29 @@ static void update_input()
         int dx = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X) * STV_TRACKBALL_SCALE;
         int dy = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y) * STV_TRACKBALL_SCALE;
 
-        /* Left analog stick as a velocity source: deflection past the deadzone
-         * adds a per-frame delta scaled by the sensitivity option. Lets these
-         * arcade trackball games be played with a normal gamepad. */
-        const int ax = input_state_cb(0, RETRO_DEVICE_ANALOG,
-                                      RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
-        const int ay = input_state_cb(0, RETRO_DEVICE_ANALOG,
-                                      RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
-        if(ax > STV_TRACKBALL_ANALOG_DEADZONE || ax < -STV_TRACKBALL_ANALOG_DEADZONE)
-            dx += ax * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
-        if(ay > STV_TRACKBALL_ANALOG_DEADZONE || ay < -STV_TRACKBALL_ANALOG_DEADZONE)
-            dy += ay * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
+        /* Analog stick as a velocity source: deflection past the deadzone adds a
+         * per-frame delta scaled by the sensitivity option, letting these arcade
+         * trackball games be played with a normal gamepad. Read both stick
+         * indices (some pads/autoconfigs report the usable stick on the right
+         * index) and deadzone each before summing — only one is ever deflected. */
+        int lx = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT,  RETRO_DEVICE_ID_ANALOG_X);
+        int ly = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT,  RETRO_DEVICE_ID_ANALOG_Y);
+        int rx = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+        int ry = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+        int ax = stv_analog_deadzone(lx) + stv_analog_deadzone(rx);
+        int ay = stv_analog_deadzone(ly) + stv_analog_deadzone(ry);
+        dx += ax * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
+        dy += ay * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
+
+        /* D-pad as a fixed-velocity movement source. Works on its own and also
+         * catches the case where RetroArch's Analog-to-Digital converts the
+         * stick into D-pad presses (then the analog read above stays 0). The
+         * step equals a full stick deflection, scaled by the same sensitivity. */
+        const int step = 32767 * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))  dx -= step;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) dx += step;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))    dy -= step;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))  dy += step;
 
         MDFN_IEN_SS::STVIO_SetTrackball(dx, dy);
     }
@@ -754,8 +772,14 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_hammer);
     } else if(g_is_trackball) {
         static const struct retro_input_descriptor desc_trackball[] = {
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT,RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT,RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
+            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
+            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
+            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
+            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
+            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT, "Trackball Left"},
+            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT,"Trackball Right"},
+            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,   "Trackball Up"},
+            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN, "Trackball Down"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
             {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
