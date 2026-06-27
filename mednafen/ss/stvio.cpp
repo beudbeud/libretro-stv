@@ -65,11 +65,19 @@ static uint16 TrackBaseline[4];
  * PORTA bit1 (active-high, MAME reads hopper->line_r). While the motor runs we
  * emulate the dispenser by toggling HopperLine every 100 ms — matching MAME's
  * HOPPER(..., attotime::from_msec(100)) — so the payout completes instead of
- * timing out ("error 3"). HopperCounter accumulates microseconds. */
-static bool   HopperMotor;
+ * timing out ("error 3"). HopperCounter accumulates microseconds.
+ *
+ * The game PWM-strobes the motor bit (rapid 0x80/0x00 on PORT-D, which also
+ * carries the coin-counter outputs), so a single-shot read of bit7 in the
+ * per-poll UpdateInput would usually catch it low and never accumulate. We keep
+ * the motor "energized" for STV_HOPPER_HOLD_US past each strobe (time-based, so
+ * it's robust to the SMPC poll cadence) which bridges the strobe gaps. */
+static bool   HopperMotor;        /* last bit7 written to PORT-D */
+static int32  HopperHold;         /* µs the motor stays "energized" after a strobe */
 static bool   HopperLine;
 static int32  HopperCounter;
 #define STV_HOPPER_PERIOD_US 100000  /* 100 ms half-period */
+#define STV_HOPPER_HOLD_US    50000  /* keep motor energized 50 ms past each strobe */
 
 static uint8 prev_sctrl;
 static uint8 prev_ectrl;
@@ -180,7 +188,14 @@ void STVIO_UpdateInput(int32 elapsed_time)
   /* Hopper: while the motor runs, toggle the medal-out sensor every 100 ms so
    * the game counts dispensed medals and the payout completes. Idle (motor off)
    * the line stays low, otherwise the game flags a jam. */
-  if(HopperMotor)
+  /* The game PWM-strobes the motor bit (rapid 0x80/0x00), so sampling the
+   * instantaneous bit would mostly catch it low and never accumulate. Treat the
+   * motor as energized while the last write held it on OR a strobe occurred
+   * within the last STV_HOPPER_HOLD_US (time-based, robust to call cadence). */
+  if(HopperHold > 0)
+   HopperHold -= elapsed_time;
+  const bool motor_on = HopperMotor || (HopperHold > 0);
+  if(motor_on)
   {
    HopperCounter += elapsed_time;
    while(HopperCounter >= STV_HOPPER_PERIOD_US)
@@ -298,6 +313,7 @@ void STVIO_Reset(bool powering_up)
   memset(TrackCounter, 0, sizeof(TrackCounter));
   memset(TrackBaseline, 0, sizeof(TrackBaseline));
   HopperMotor = false;
+  HopperHold = 0;
   HopperLine = false;
   HopperCounter = 0;
  }
@@ -470,7 +486,11 @@ void STVIO_WriteIOGA(const sscpu_timestamp_t timestamp, uint8 A, uint8 V)
  if(ControlScheme == STV_CONTROL_TRACKBALL)
  {
   if(A == 0x03)        // PORT-D bit7 → hopper motor (MAME hop_ioga_w); also falls through to DataOut
+  {
    HopperMotor = (V & 0x80);
+   if(V & 0x80)        // game PWM-strobes the motor; refresh the energized hold
+    HopperHold = STV_HOPPER_HOLD_US;
+  }
 
   if(A == 0x0E)        // MODE register
   {
