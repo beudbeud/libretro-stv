@@ -36,6 +36,21 @@ Critter Crusher uses a resistive touchscreen panel wired to the JAMMA I/O connec
 
 The frontend's pointer device (`RETRO_DEVICE_POINTER`) is used for input — this covers mouse on desktop, touchscreen on mobile/Android, and light-gun mappings. A crosshair overlay can be shown and coloured via core options (see [Input options](#input)).
 
+### Trackball & medal games
+
+A handful of ST-V titles use a **trackball** wired to the IOGA I/O gate array (PORT-G), and the medal titles among them also drive a **medal hopper** (motor on PORT-D, medal-out sensor on PORT-A).
+
+| Game | Status |
+|------|--------|
+| Hashire Patrol Car | Working |
+| Sky Challenger | Working |
+| Nerae! Super Goal | Working |
+| Technical Bowling | Working |
+
+The trackball can be rolled with a **mouse / real trackball**, an **analog stick** (either stick index), or the **D-pad** — see [Input mapping](#trackball). Roll speed for the analog/D-pad fallback is adjustable via the `mednafen_stv_trackball_sensitivity` core option.
+
+The **medal hopper** is fully emulated: the game PWM-strobes the motor bit, so the core keeps the motor "energized" for a short hold past each strobe, letting the medal-out sensor line toggle correctly during payout (fixes the in-game "error 3").
+
 ---
 
 ### Acclaim RAX sound board — Batman Forever
@@ -114,6 +129,23 @@ Critter Crusher is controlled entirely via `RETRO_DEVICE_POINTER`:
 
 Works with mouse (desktop), touchscreen (Android / mobile), or any pointer device the frontend exposes. An optional crosshair overlay shows the current pointer position (see [Input options](#input)).
 
+### Trackball
+
+Trackball games (Hashire Patrol Car, Sky Challenger, Nerae! Super Goal, Technical Bowling) accept three input methods at once — use whichever your controller exposes:
+
+| Input | Action |
+|-------|--------|
+| Mouse / real trackball | Roll trackball (1:1, unaffected by sensitivity) |
+| **Left or right analog stick** | Roll trackball (speed set by sensitivity option) |
+| **D-pad** | Roll trackball (fallback, speed set by sensitivity option) |
+| B / A / R1 | SW1 (A) / SW2 (B) / SW3 (C) |
+| Start | Start |
+| **Select** | **Insert Coin** |
+| **L3** | **Test Button** |
+| **R3** | **Service Button** |
+
+Both analog stick indices are read, so the stick works regardless of which index your frontend maps the physical stick to. Roll speed for the analog/D-pad methods is set by `mednafen_stv_trackball_sensitivity` (see [Input options](#input)); mouse/real-trackball input is always 1:1.
+
 ---
 
 ## Core options
@@ -133,6 +165,7 @@ Works with mouse (desktop), touchscreen (Android / mobile), or any pointer devic
 |--------|---------|-------------|
 | `mednafen_stv_crosshair` | `enabled` | Show crosshair overlay for touchscreen games (Critter Crusher) |
 | `mednafen_stv_crosshair_color` | `white` | Crosshair colour: White / Red / Green / Blue / Yellow / Cyan |
+| `mednafen_stv_trackball_sensitivity` | `100` | Roll speed of the analog stick / D-pad for trackball games (25–400%). Higher rolls faster at full deflection. Does not affect mouse / real-trackball input. |
 
 ### Video
 
