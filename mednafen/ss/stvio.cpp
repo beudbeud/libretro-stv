@@ -671,7 +671,10 @@ uint8 IODevice_STVSMPC<sport>::UpdateBus(const sscpu_timestamp_t timestamp, cons
    if((prev_sctrl ^ cur_sctrl) & 0x08)
     SOUND_ResetSCSP();
 
-   SOUND_Set68KActive(cur_sctrl == 0x00); // FIXME: probably not totally correct.
+   // 68K is held active only by the reset bit (0x10), matching MAME stv.cpp
+   // pdr2_output_w: m_en_68k = ((data & 0x10) >> 4) ^ 1. The SCSP-reset bit
+   // (0x08) must NOT halt the 68K, so a lone SCSP reset leaves it running.
+   SOUND_Set68KActive(!(cur_sctrl & 0x10));
   }
 
   prev_sctrl = cur_sctrl;
