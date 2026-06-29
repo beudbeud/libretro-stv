@@ -1030,6 +1030,7 @@ RETRO_API void retro_run(void)
      *   - SW mode (g_deint != null): Process fills the opposite-field rows.
      *   - "Off" mode (g_deint == null): VDP2::SetDeinterlaceOff was set to
      *     true; the renderer already mirrored each scanline at draw time. */
+    const bool frame_interlaced = espec.InterlaceOn;
     if(espec.InterlaceOn) {
         if(g_deint) {
             if(!g_prev_interlaced) g_deint->ClearState();
@@ -1055,9 +1056,14 @@ RETRO_API void retro_run(void)
          * Sun) content fills rows 0..239 without borders, so the same window
          * loses 8 pixels top and bottom. For any non-224-NTSC mode (240/256, or
          * PAL), follow the game's actual content area instead. */
+        /* Only follow the content area for *non-interlaced* mode switches.
+         * GetContentArea reports a single-field height (224/240/256); for an
+         * interlaced frame the surface is double-height (e.g. Decathlete's
+         * 240-line + interlace = 448) and DisplayRect.h already carries it, so
+         * applying the single-field crop here would show only the top half. */
         int content_y, content_h;
         MDFN_IEN_SS::VDP2::GetContentArea(&content_y, &content_h);
-        if(content_y != 8 || content_h != 224) {
+        if(!frame_interlaced && (content_y != 8 || content_h != 224)) {
             dy = content_y;
             dh = content_h;
         }
