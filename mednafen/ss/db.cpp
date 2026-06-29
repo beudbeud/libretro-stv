@@ -1583,6 +1583,14 @@ static const STVGameInfo STVGI[] =
   }
  },
 
+ // Non-functional: boots and runs code, but the game's ROM-checksum self-test
+ // fails ("ERROR 10 - ROM HAS CHANGED") and it never reaches gameplay. ROM
+ // layout matches MAME (16-bit IC13 EPROM loaded 16LE@0, MPR order/offsets
+ // identical); backup RAM persists correctly and clearing it via the test menu
+ // has no effect, so this is an emulation-accuracy difference, not a ROM-map or
+ // backup bug. Suspected cause: unmapped cart region reads 0xFF where MAME's
+ // ROM_REGION32_BE/ERASE00 reads 0x00. Medal cabinet; other untested medal
+ // titles (Dancing Fever Gold, Maru-Chan de Goo) may behave similarly.
  {
   "Fantasy Zone (medal game)",
   SMPC_AREA_JP,

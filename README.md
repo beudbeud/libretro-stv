@@ -6,67 +6,7 @@ A libretro core for **Sega ST-V (Sega Titan Video)** arcade hardware, wrapping [
 
 ## Supported games
 
-The core supports all **70 ST-V titles** in the database (64 from Mednafen 1.32.1 + 6 additions), including games that require the optional protection/encryption chips:
-
-### 315-5881 encryption chip
-| Game | Status |
-|------|--------|
-| Astra SuperStars | Working |
-| Final Fight Revenge | Working |
-| Steep Slope Sliders | Working |
-| Tecmo World Cup '98 | Working |
-| Tecmo World Soccer '98 | Working |
-| Touryuu Densetsu Elan Doree | Working |
-
-### 315-5838 decompression + encryption chip
-| Game | Status |
-|------|--------|
-| Decathlete (V1.000) | Working |
-| Decathlete (V1.001) | Working |
-
-The 315-5838 combines Decathlete-specific 16-bit decryption (`decipher()`) with a 12-level Huffman decompressor. The game uploads tree and dictionary tables at startup via the chip's register interface. ROM bank selection matches MAME's `decathlt_prot_srcaddr_w` (SH-2 address bits [24:23] → 8 MB bank window).
-
-### Touchscreen — Critter Crusher
-
-Critter Crusher uses a resistive touchscreen panel wired to the JAMMA I/O connector. The hardware reports a touched position as a 6-bit X (0–62) and 6-bit Y (0–46) grid, with a hit-bit in the I/O register.
-
-| Game | Status |
-|------|--------|
-| Critter Crusher | Working |
-
-The frontend's pointer device (`RETRO_DEVICE_POINTER`) is used for input — this covers mouse on desktop, touchscreen on mobile/Android, and light-gun mappings. A crosshair overlay can be shown and coloured via core options (see [Input options](#input)).
-
-### Trackball & medal games
-
-A handful of ST-V titles use a **trackball** wired to the IOGA I/O gate array (PORT-G), and the medal titles among them also drive a **medal hopper** (motor on PORT-D, medal-out sensor on PORT-A).
-
-| Game | Status |
-|------|--------|
-| Hashire Patrol Car | Working |
-| Sky Challenger | Working |
-| Nerae! Super Goal | Working |
-| Technical Bowling | Working |
-
-The trackball can be rolled with a **mouse / real trackball**, an **analog stick** (either stick index), or the **D-pad** — see [Input mapping](#trackball). Roll speed for the analog/D-pad fallback is adjustable via the `mednafen_stv_trackball_sensitivity` core option.
-
-The **medal hopper** is fully emulated: the game PWM-strobes the motor bit, so the core keeps the motor "energized" for a short hold past each strobe, letting the medal-out sensor line toggle correctly during payout (fixes the in-game "error 3").
-
----
-
-### Acclaim RAX sound board — Batman Forever
-
-Batman Forever uses an external audio expansion board (**Acclaim RAX**) plugged into the ST-V cartridge slot. The RAX contains an **ADSP-2181 DSP**, four 2 MB sample ROMs, and a 512 KB program ROM. The DSP runs a custom firmware that handles sound commands from the SH-2, mixes PCM voices, and streams audio via the SPORT0 serial port.
-
-| Game | Status |
-|------|--------|
-| Batman Forever | Working (full audio) |
-
-**Implementation notes:**
-
-- Standalone ADSP-2181 CPU emulator adapted from MAME's `adsp2100.cpp` (Aaron Giles, BSD-3-Clause).
-- BDMA transfers load firmware segments into DSP program memory; the synthesis engine arms itself via a PM[0x001C] hook patched each BDMA cycle.
-- The BDMA IRQ is pulsed (assert + deassert in one step) to mimic MAME's `pulse_input_line`, ensuring a fresh rising edge for every transfer — matching the hardware's edge-triggered latch behaviour.
-- Audio is sampled at 44 100 Hz (378 DSP cycles/sample) and mixed into the libretro audio ring buffer via the SPORT0-TX autobuffer mechanism.
+The core supports all **70 ST-V titles** in the database (64 from Mednafen 1.32.1 + 6 additions), including games that require the optional protection/encryption chips. See **[COMPATIBILITY.md](COMPATIBILITY.md)** for the per-title status and special-hardware details (315-5881/5838, RAX audio, touchscreen, trackball/medal).
 
 ---
 
