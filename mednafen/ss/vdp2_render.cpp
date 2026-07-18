@@ -3665,6 +3665,23 @@ void VDP2REND_DrawLine(const int vdp2_line, const uint32 crt_line, const bool fi
 
  if(MDFN_LIKELY(crt_line < VisibleLines))
  {
+  // Frameskip: don't queue any pixel work to the render thread. Register/VRAM
+  // write commands still flow, and DrawLine's per-frame accumulators are all
+  // reset at vdp2_line==0, so skipping whole frames leaves state coherent.
+  // Still store a valid LineWidths entry (pixels are stale, nobody reads them)
+  // so downstream sanity checks don't see the frontend's ~0 fill.
+  if(MDFN_UNLIKELY(espec->skip))
+  {
+   uint16 skip_line = crt_line;
+
+   if(espec->InterlaceOn)
+    skip_line = (skip_line << 1) | espec->InterlaceField;
+
+   espec->LineWidths[skip_line] = 4;
+   NextOutLine = crt_line + 1;
+   return;
+  }
+
   uint16 out_line = crt_line;
 
   if(espec->InterlaceOn)
