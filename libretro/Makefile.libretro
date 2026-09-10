@@ -77,7 +77,10 @@ else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 and
    ifeq ($(ANDROID_NDK_ROOT),)
       $(error Set ANDROID_NDK_ROOT (or NDK_ROOT) to your Android NDK path)
    endif
-   ANDROID_API ?= 24
+   # API 26 is the first level where bionic declares mblen(), which trio.c
+   # calls whenever MB_LEN_MAX exists; with NDK 28+ an implicit declaration is
+   # an error rather than a warning.
+   ANDROID_API ?= 26
    HOST_TAG := $(shell uname -s | tr A-Z a-z)-x86_64
    NDK_BIN  := $(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(HOST_TAG)/bin
 
