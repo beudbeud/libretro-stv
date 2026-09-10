@@ -54,10 +54,10 @@
 # define MDFN_ASSUME_ALIGNED(p, align) \
          ((decltype(p))__builtin_assume_aligned((p), (align)))
 # define MDFN_UNDEFINED(cond) ((cond) ? (void)__builtin_unreachable() : (void)0)
-# if defined(__x86_64__) || defined(__i386__)
-#  define MDFN_FASTCALL
-# elif defined(__arm__) || defined(__aarch64__)
-#  define MDFN_FASTCALL
+/* Must match types.h, which gives 32-bit x86 the fastcall convention: this
+ * header is force-included first, so a mismatch would be an ABI mismatch. */
+# if defined(__i386__) || defined(__i386) || defined(__386__) || defined(_M_IX86)
+#  define MDFN_FASTCALL __attribute__((fastcall))
 # else
 #  define MDFN_FASTCALL
 # endif
@@ -175,18 +175,17 @@
 # include "types.h"
 #endif
 
-/* ── Type sizes (normally from autotools AC_CHECK_SIZEOF) ─────────────────── */
+/* ── Type sizes (normally from autotools AC_CHECK_SIZEOF) ─────────────────── *
+ * Taken from the compiler rather than hardcoded: they differ between LP64
+ * (Linux/macOS), LLP64 (Windows) and the 32-bit targets, and minilzo checks
+ * them against sizeof() at compile time. */
 #define SIZEOF_CHAR         1
 #define SIZEOF_SHORT        2
-#define SIZEOF_INT          4
-/* Windows is LLP64: sizeof(long)==4; Linux/macOS are LP64: sizeof(long)==8 */
-#ifdef _WIN32
-# define SIZEOF_LONG        4
-#else
-# define SIZEOF_LONG        8
-#endif
-#define SIZEOF_LONG_LONG    8
+#define SIZEOF_INT          __SIZEOF_INT__
+#define SIZEOF_LONG         __SIZEOF_LONG__
+#define SIZEOF_LONG_LONG    __SIZEOF_LONG_LONG__
+#define SIZEOF_PTRDIFF_T    __SIZEOF_PTRDIFF_T__
+#define SIZEOF_SIZE_T       __SIZEOF_SIZE_T__
+#define SIZEOF_VOID_P       __SIZEOF_POINTER__
+/* _FILE_OFFSET_BITS=64 is passed on every target. */
 #define SIZEOF_OFF_T        8
-#define SIZEOF_PTRDIFF_T    8
-#define SIZEOF_SIZE_T       8
-#define SIZEOF_VOID_P       8

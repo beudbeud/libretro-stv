@@ -156,7 +156,7 @@ ifeq ($(USE_BUNDLED_ZSTD),1)
 endif
 
 CXXFLAGS := \
-    -std=c++11 -O3 \
+    -std=gnu++11 -O3 \
     -fsigned-char -fwrapv -fexceptions \
     -fno-fast-math -fno-unsafe-math-optimizations \
     -fstrict-aliasing \
