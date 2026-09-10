@@ -221,6 +221,8 @@ CORE_SRCS := $(filter-out \
 # do not reach.
 CORE_SRCS += $(CORE_DIR)/mednafen/net/Net.cpp
 ifeq ($(WIN32_BUILD),1)
+   # POSIX-only sources the globs above reach (Time_POSIX.cpp)
+   CORE_SRCS := $(filter-out %_POSIX.cpp, $(CORE_SRCS))
    CORE_SRCS += \
        $(CORE_DIR)/mednafen/net/Net_WS2.cpp \
        $(CORE_DIR)/mednafen/mthreading/MThreading_Win32.cpp
