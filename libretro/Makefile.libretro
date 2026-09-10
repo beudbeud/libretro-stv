@@ -1,25 +1,77 @@
-# Makefile.libretro — build mednafen_stv_libretro.so
+# Makefile.libretro — build mednafen_stv_libretro.{so,dll,dylib}
 # Usage:
 #   Linux:          make -f libretro/Makefile.libretro [TARGET_CROSS=aarch64-buildroot-linux-gnu-]
+#   macOS:          make -f libretro/Makefile.libretro platform=osx
+#   Windows:        make -f libretro/Makefile.libretro platform=win64 TARGET_CROSS=x86_64-w64-mingw32-
 #   Android arm64:  make -f libretro/Makefile.libretro platform=android-arm64  ANDROID_NDK_ROOT=/path/to/ndk
 #   Android armv7:  make -f libretro/Makefile.libretro platform=android-armv7  ANDROID_NDK_ROOT=/path/to/ndk
 #   Android x86_64: make -f libretro/Makefile.libretro platform=android-x86_64 ANDROID_NDK_ROOT=/path/to/ndk
 #   Android x86:    make -f libretro/Makefile.libretro platform=android-x86    ANDROID_NDK_ROOT=/path/to/ndk
+#
+# CC/CXX/AR set in the environment or on the command line take precedence over
+# the platform defaults below — that is how the libretro buildbot templates
+# hand a core its cross toolchain.
 
 TARGET_NAME := mednafen_stv
 CORE_DIR    := $(CURDIR)
 
 platform ?= unix
 
+# Spellings used by the buildbot templates.
+ifeq ($(platform),android-arm)
+   override platform := android-armv7
+endif
+ifneq (,$(filter $(platform),win windows))
+   override platform := win64
+endif
+
 BUILD_DIR   := $(CORE_DIR)/build_libretro/$(platform)
 
-USE_BUNDLED_ZSTD :=
+# zstd is only ever used for decompression here (ZstdDecompressFilter), which
+# the copy bundled in mednafen/zstd covers, so the core has no external zstd
+# dependency by default. USE_SYSTEM_ZSTD=1 links against -lzstd instead.
+USE_SYSTEM_ZSTD  ?= 0
+USE_BUNDLED_ZSTD := 1
+ifeq ($(USE_SYSTEM_ZSTD),1)
+   USE_BUNDLED_ZSTD :=
+   ZSTD_LIBS := -lzstd
+endif
+
+TARGET_EXT  := so
+TARGET_FILE := $(TARGET_NAME)_libretro
+WIN32_BUILD :=
+fpic        := -fPIC
 
 ifeq ($(platform),unix)
-   CC  := $(TARGET_CROSS)gcc
-   CXX := $(TARGET_CROSS)g++
-   AR  := $(TARGET_CROSS)ar
-   PLATFORM_LIBS := -lz -lpthread -lzstd
+   CC_DEF  := $(TARGET_CROSS)gcc
+   CXX_DEF := $(TARGET_CROSS)g++
+   AR_DEF  := $(TARGET_CROSS)ar
+   PLATFORM_LIBS := -lz -lpthread $(ZSTD_LIBS)
+   SHARED := -shared -Wl,-soname,$(TARGET_FILE).so \
+             -Wl,--version-script=$(CORE_DIR)/libretro/link.T
+else ifeq ($(platform),osx)
+   TARGET_EXT := dylib
+   CC_DEF  := clang
+   CXX_DEF := clang++
+   AR_DEF  := ar
+   PLATFORM_LIBS := -lz -lpthread -liconv $(ZSTD_LIBS)
+   SHARED := -dynamiclib
+   ifneq ($(LIBRETRO_APPLE_PLATFORM),)
+      APPLE_FLAGS := -target $(LIBRETRO_APPLE_PLATFORM)
+   endif
+   ifneq ($(LIBRETRO_APPLE_ISYSROOT),)
+      APPLE_FLAGS += -isysroot $(LIBRETRO_APPLE_ISYSROOT)
+   endif
+else ifneq (,$(filter $(platform),win64 win32))
+   TARGET_EXT  := dll
+   WIN32_BUILD := 1
+   CC_DEF  := $(TARGET_CROSS)gcc
+   CXX_DEF := $(TARGET_CROSS)g++
+   AR_DEF  := $(TARGET_CROSS)ar
+   # -fPIC is the default on Windows and only earns a warning if passed.
+   fpic :=
+   PLATFORM_LIBS := -lz -lws2_32 $(ZSTD_LIBS)
+   SHARED := -shared -static-libgcc -static-libstdc++
 else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
    ANDROID_NDK_ROOT ?= $(NDK_ROOT)
    ifeq ($(ANDROID_NDK_ROOT),)
@@ -42,14 +94,32 @@ else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 and
       ANDROID_TRIPLE := i686-linux-android
    endif
 
+   # The NDK toolchain is not negotiable here, so it is not left to CC/CXX.
    CC  := $(NDK_BIN)/$(ANDROID_TRIPLE)$(ANDROID_API)-clang
    CXX := $(NDK_BIN)/$(ANDROID_TRIPLE)$(ANDROID_API)-clang++
    AR  := $(NDK_BIN)/llvm-ar
 
-   PLATFORM_LIBS    := -lz -llog
+   TARGET_FILE   := $(TARGET_NAME)_libretro_android
+   PLATFORM_LIBS := -lz -llog $(ZSTD_LIBS)
+   # bionic has no iconv; mednafen's config header already keys off __ANDROID__
    USE_BUNDLED_ZSTD := 1
+   SHARED := -shared -Wl,-soname,$(TARGET_FILE).so \
+             -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
+             -static-libstdc++
 else
    $(error Unknown platform "$(platform)")
+endif
+
+# Platform defaults only apply when make is using its own built-ins, so a
+# toolchain named in the environment or on the command line survives.
+ifeq ($(origin CC),default)
+   CC := $(CC_DEF)
+endif
+ifeq ($(origin CXX),default)
+   CXX := $(CXX_DEF)
+endif
+ifeq ($(origin AR),default)
+   AR := $(AR_DEF)
 endif
 
 CCACHE_BIN ?=
@@ -90,32 +160,26 @@ CXXFLAGS := \
     -fsigned-char -fwrapv -fexceptions \
     -fno-fast-math -fno-unsafe-math-optimizations \
     -fstrict-aliasing \
-    -fPIC -fvisibility=hidden \
+    $(fpic) -fvisibility=hidden \
+    $(APPLE_FLAGS) \
     $(DEFINES) $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
-# GCC-only flags; clang (NDK) doesn't know them.
-ifeq ($(platform),unix)
+# GCC-only flags; clang (NDK, Apple) doesn't know them.
+ifeq (0,$(shell $(CXX) --version 2>/dev/null | grep -c clang))
    CXXFLAGS += -fno-printf-return-value -fno-aggressive-loop-optimizations -fno-ipa-icf
 endif
 
 CFLAGS := \
     -O3 -fsigned-char -fwrapv \
     -fno-fast-math -fno-unsafe-math-optimizations \
-    -fstrict-aliasing -fPIC -fvisibility=hidden \
+    -fstrict-aliasing $(fpic) -fvisibility=hidden \
+    $(APPLE_FLAGS) \
     -DHAVE_CONFIG_H -DZSTD_NO_TRACE=1 -DZSTD_HAVE_WEAK_SYMBOLS=0 \
     $(INCLUDES) \
     -include $(BUILD_DIR)/config.h
 
-LDFLAGS := -shared \
-    -Wl,-soname,$(TARGET_NAME)_libretro.so \
-    -Wl,--version-script=$(CORE_DIR)/libretro/link.T \
-    $(PLATFORM_LIBS)
-
-# Android: embed the C++ runtime statically so libc++_shared.so is not required
-ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
-   LDFLAGS += -static-libstdc++
-endif
+LDFLAGS := $(SHARED) $(APPLE_FLAGS) $(PLATFORM_LIBS)
 
 CORE_SRCS :=
 CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/*.cpp)
@@ -139,8 +203,6 @@ CORE_SRCS += $(wildcard $(CORE_DIR)/mednafen/hw_video/*.cpp)
 
 # Standalone driver sources
 CORE_SRCS := $(filter-out $(CORE_DIR)/mednafen/drivers/%, $(CORE_SRCS))
-# Windows-only sources
-CORE_SRCS := $(filter-out %win32-common.cpp %_Win32.cpp %_win32.cpp, $(CORE_SRCS))
 # Test-only sources (qtrecord.cpp is kept: referenced by mednafen.cpp, zlib already linked)
 CORE_SRCS := $(filter-out \
     $(CORE_DIR)/mednafen/tests.cpp \
@@ -152,11 +214,20 @@ CORE_SRCS := $(filter-out \
     $(CORE_DIR)/mednafen/cdrom/CDAFReader_Vorbis.cpp \
     $(CORE_DIR)/mednafen/cdrom/CDAFReader_FLAC.cpp, $(CORE_SRCS))
 
-# POSIX-specific sources not picked up by the globs above
-CORE_SRCS += \
-    $(CORE_DIR)/mednafen/net/Net.cpp \
-    $(CORE_DIR)/mednafen/net/Net_POSIX.cpp \
-    $(CORE_DIR)/mednafen/mthreading/MThreading_POSIX.cpp
+# Threading, networking and time backends, plus the sources the globs above
+# do not reach.
+CORE_SRCS += $(CORE_DIR)/mednafen/net/Net.cpp
+ifeq ($(WIN32_BUILD),1)
+   CORE_SRCS += \
+       $(CORE_DIR)/mednafen/net/Net_WS2.cpp \
+       $(CORE_DIR)/mednafen/mthreading/MThreading_Win32.cpp
+else
+   # Windows-only sources
+   CORE_SRCS := $(filter-out %win32-common.cpp %_Win32.cpp %_win32.cpp, $(CORE_SRCS))
+   CORE_SRCS += \
+       $(CORE_DIR)/mednafen/net/Net_POSIX.cpp \
+       $(CORE_DIR)/mednafen/mthreading/MThreading_POSIX.cpp
+endif
 
 LIBRETRO_SRCS := $(CORE_DIR)/libretro/libretro.cpp
 ALL_CXX_SRCS  := $(LIBRETRO_SRCS) $(CORE_SRCS)
@@ -187,7 +258,7 @@ endif
 OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(ALL_CXX_SRCS)) \
         $(patsubst $(CORE_DIR)/%.c,$(BUILD_DIR)/%.o,$(CORE_C_SRCS))
 
-TARGET := $(CORE_DIR)/$(TARGET_NAME)_libretro.so
+TARGET := $(CORE_DIR)/$(TARGET_FILE).$(TARGET_EXT)
 
 .PHONY: all clean
 

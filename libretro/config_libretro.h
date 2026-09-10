@@ -96,7 +96,10 @@
 #define HAVE_SYS_STAT_H         1
 #define HAVE_SYS_TYPES_H        1
 #define HAVE_PTHREAD_H          1
-#ifndef __ANDROID__
+/* iconv is only used to transcode PSF tags (PSFLoader.cpp) and is optional.
+ * bionic has no iconv at all, and on Windows it would mean an extra libiconv
+ * to link, so leave it out on both. */
+#if !defined(__ANDROID__) && !defined(_WIN32)
 # define HAVE_ICONV_H           1
 #endif
 #define HAVE_DIRENT_H           1
@@ -135,7 +138,9 @@
 /* ── Libraries ───────────────────────────────────────────────────────────── */
 #define HAVE_LIBZ               1
 #define HAVE_ZSTD               1
-#define HAVE_LIBICONV           1
+#ifdef HAVE_ICONV_H
+# define HAVE_LIBICONV          1
+#endif
 
 /* Disabled in libretro build */
 #define HAVE_ALSA               0

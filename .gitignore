@@ -26,3 +26,8 @@
 /mednafen/ss/Makefile
 
 TODO.md
+
+/build_libretro/
+*.so
+*.dll
+*.dylib
