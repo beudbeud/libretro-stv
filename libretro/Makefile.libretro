@@ -70,7 +70,7 @@ else ifneq (,$(filter $(platform),win64 win32))
    AR_DEF  := $(TARGET_CROSS)ar
    # -fPIC is the default on Windows and only earns a warning if passed.
    fpic :=
-   PLATFORM_LIBS := -lz -lws2_32 $(ZSTD_LIBS)
+   PLATFORM_LIBS := -lz -lws2_32 -lwinmm $(ZSTD_LIBS)
    SHARED := -shared -static-libgcc -static-libstdc++
 else ifneq (,$(filter $(platform),android-arm64 android-armv7 android-x86_64 android-x86))
    ANDROID_NDK_ROOT ?= $(NDK_ROOT)
