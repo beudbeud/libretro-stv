@@ -1032,7 +1032,10 @@ RETRO_API void retro_run(void)
      *     true; the renderer already mirrored each scanline at draw time. */
     const bool frame_interlaced = espec.InterlaceOn;
     if(espec.InterlaceOn) {
-        if(g_deint) {
+        /* On skipped frames the renderer drew nothing: LineWidths are stale
+         * (~0) and the surface untouched, so running the deinterlacer would
+         * read garbage widths. The frame isn't displayed anyway. */
+        if(g_deint && !skip_frame) {
             if(!g_prev_interlaced) g_deint->ClearState();
             g_deint->Process(espec.surface, espec.DisplayRect, espec.LineWidths, espec.InterlaceField);
         }
