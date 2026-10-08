@@ -7,12 +7,14 @@
 **     -o key=value    core option (repeatable), e.g. -o mednafen_stv_autortc=disabled
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
+**     -c CPU          pin the main thread to this CPU (Linux)
 **     -p FILE         sample the program counter (SIGPROF, 1 kHz, all threads)
 **                     and write "<tid> <pc>" lines plus the core's load address
 **                     to FILE; symbolize with nm on the unstripped core
 **
 ** Prints one line per 300 frames (ms/frame) and a final summary:
-**   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X
+**   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X cpu_ms/frame=Y
+** (cpu_ms is the main thread's CPU time: wall minus cpu is time spent waiting)
 ** The hashes let two runs be compared (e.g. DSP JIT on/off, before/after a
 ** change) without any display; the timing is a headless benchmark.
 */
@@ -29,6 +31,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <ucontext.h>
+#include <sched.h>
+#include <dirent.h>
 #include "libretro/libretro.h"
 
 static struct { char key[64]; char val[64]; } opts[32];
@@ -156,12 +160,44 @@ static size_t audio_batch_cb(const int16_t* data, size_t frames) { fnv(&ahash, d
 static void input_poll_cb(void) {}
 static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id) { (void)port; (void)device; (void)index; (void)id; return 0; }
 
+/* Per-thread CPU time of this process (Linux): "name=seconds" pairs. */
+static void print_thread_cpu(FILE* out, int frames)
+{
+#ifdef __linux__
+ char path[256];
+ DIR* d = opendir("/proc/self/task");
+ if(!d) return;
+ fprintf(out, "thread_cpu_ms/frame:");
+ struct dirent* de;
+ while((de = readdir(d)))
+ {
+  long tid = atol(de->d_name); if(!tid) continue;
+  snprintf(path, sizeof(path), "/proc/self/task/%ld/stat", tid);
+  FILE* f = fopen(path, "r"); if(!f) continue;
+  char buf[1024]; size_t n = fread(buf, 1, sizeof(buf) - 1, f); fclose(f); buf[n] = 0;
+  char* rp = strrchr(buf, ')'); char* lp = strchr(buf, '('); if(!rp || !lp) continue;
+  *rp = 0; const char* name = lp + 1;
+  long ut = 0, st = 0; /* fields 14, 15 after ") " */
+  { const char* q = rp + 2; int fi = 3; char* end;
+    while(*q && fi < 14) { if(*q == ' ') fi++; q++; }
+    ut = strtol(q, &end, 10); st = strtol(end, NULL, 10); }
+  fprintf(out, " %s=%.2f", name, (ut + st) * 1000.0 / sysconf(_SC_CLK_TCK) / frames);
+ }
+ closedir(d);
+ fprintf(out, "\n");
+#else
+ (void)out; (void)frames;
+#endif
+}
+
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+static double cpu_ms(void) { struct timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
 int main(int argc, char** argv)
 {
  int frames = 600, warm = 0;
  const char* prof_path = NULL;
+ int pin_cpu = -1;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
  int i = 1;
@@ -173,6 +209,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-S") && i + 1 < argc) snprintf(savedir, sizeof(savedir), "%s", argv[++i]);
   else if(!strcmp(argv[i], "-q")) quiet = 1;
   else if(!strcmp(argv[i], "-p") && i + 1 < argc) prof_path = argv[++i];
+  else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
@@ -183,7 +220,7 @@ int main(int argc, char** argv)
   }
   else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
  }
- if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-q] [-p prof] core.so rom\n", argv[0]); return 2; }
+ if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-q] [-p prof] [-c cpu] core.so rom\n", argv[0]); return 2; }
  const char* core = argv[i], *rom = argv[i + 1];
  if(!sysdir[0])
  {
@@ -192,6 +229,11 @@ int main(int argc, char** argv)
   if(sl) *sl = 0; else strcpy(sysdir, ".");
  }
 
+ if(pin_cpu >= 0)
+ {
+  cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(pin_cpu, &cs);
+  if(sched_setaffinity(0, sizeof(cs), &cs)) perror("sched_setaffinity");
+ }
  void* h = dlopen(core, RTLD_NOW | RTLD_LOCAL);
  if(!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
  #define SYM(name) name##_t name = (name##_t)dlsym(h, #name); if(!name) { fprintf(stderr, "missing %s\n", #name); return 1; }
@@ -225,20 +267,21 @@ int main(int argc, char** argv)
  cur_w = av.geometry.base_width; cur_h = av.geometry.base_height;
  if(!quiet) fprintf(stderr, "loaded: %ux%u @ %.3f Hz\n", cur_w, cur_h, av.timing.fps);
 
- double t_total = 0, t_win = 0, tmax = 0;
+ double t_total = 0, t_win = 0, tmax = 0, c_total = 0;
  for(int f = 0; f < frames; f++)
  {
   if(prof_path && f == warm) prof_start();
-  const double t0 = now_ms();
+  const double t0 = now_ms(), c0 = cpu_ms();
   retro_run();
-  const double dt = now_ms() - t0;
-  if(f >= warm) { t_total += dt; t_win += dt; if(dt > tmax) tmax = dt; }
+  const double dt = now_ms() - t0, dc = cpu_ms() - c0;
+  if(f >= warm) { t_total += dt; t_win += dt; c_total += dc; if(dt > tmax) tmax = dt; }
   if(!quiet && (f + 1) % 300 == 0) { fprintf(stderr, "frame %6d  %.2f ms/frame (window)\n", f + 1, t_win / 300.0); t_win = 0; }
  }
  const int timed = frames > warm ? frames - warm : 1;
  if(prof_path) prof_dump(prof_path, h);
- printf("frames=%d video=%016llx audio=%016llx samples=%llu ms/frame=%.3f max=%.2f geometry=%ux%u\n",
-        frames, (unsigned long long)vhash, (unsigned long long)ahash, (unsigned long long)nsamples, t_total / timed, tmax, cur_w, cur_h);
+ print_thread_cpu(stderr, frames);
+ printf("frames=%d video=%016llx audio=%016llx samples=%llu ms/frame=%.3f cpu_ms/frame=%.3f max=%.2f geometry=%ux%u\n",
+        frames, (unsigned long long)vhash, (unsigned long long)ahash, (unsigned long long)nsamples, t_total / timed, c_total / timed, tmax, cur_w, cur_h);
 
  retro_unload_game();
  retro_deinit();
