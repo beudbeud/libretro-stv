@@ -21,6 +21,7 @@
 #include "NativeVFS.h"
 #include "git.h"
 #include "MemoryStream.h"
+#include "ExtMemStream.h"
 #include "video/surface.h"
 #include "video/Deinterlacer.h"
 
@@ -1047,11 +1048,14 @@ RETRO_API void retro_run(void)
      *     true; the renderer already mirrored each scanline at draw time. */
     const bool frame_interlaced = espec.InterlaceOn;
     if(espec.InterlaceOn) {
-        if(g_deint) {
+        if(g_deint && !skip_frame) {
             if(!g_prev_interlaced) g_deint->ClearState();
             g_deint->Process(espec.surface, espec.DisplayRect, espec.LineWidths, espec.InterlaceField);
         }
-        g_prev_interlaced = true;
+        /* A skipped frame (never shown) is not deinterlaced, so its field is
+         * missing from the history: the next shown frame starts from a clean
+         * state (one bobbed frame) instead of blending against a stale field. */
+        g_prev_interlaced = !skip_frame;
         espec.InterlaceOn = false;
     } else {
         g_prev_interlaced = false;
@@ -1139,16 +1143,11 @@ RETRO_API bool retro_serialize(void *data, size_t size)
 {
     if(!game_info || !data) return false;
     try {
-        MemoryStream st(s_serialize_size ? s_serialize_size : size, false);
+        /* Serialize straight into the frontend's buffer: no per-call allocation
+         * or copy, which matters when rewind/run-ahead call this every frame.
+         * A fixed-size ExtMemStream throws if the state would not fit. */
+        ExtMemStream st(data, size);
         MDFNSS_SaveSM(&st, true);
-        size_t written = (size_t)st.size();
-        if(written > size) {
-            lr_log(RETRO_LOG_ERROR, "Serialize overflow: %zu > %zu\n", written, size);
-            return false;
-        }
-        memcpy(data, st.map(), written);
-        if(written < size)
-            memset((uint8_t*)data + written, 0, size - written);
         return true;
     } catch(std::exception &e) {
         lr_log(RETRO_LOG_ERROR, "retro_serialize failed: %s\n", e.what());
@@ -1160,9 +1159,7 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
 {
     if(!game_info || !data) return false;
     try {
-        MemoryStream st(size, -1);
-        memcpy(st.map(), data, size);
-        st.seek(0, SEEK_SET);
+        ExtMemStream st(data, size);
         MDFNSS_LoadSM(&st, true);
         return true;
     } catch(std::exception &e) {
@@ -1175,11 +1172,10 @@ RETRO_API void retro_cheat_reset(void) {}
 RETRO_API void retro_cheat_set(unsigned, bool, const char*) {}
 RETRO_API unsigned retro_get_region(void)
 {
-    if(!initialized) return RETRO_REGION_NTSC;
-    try {
-        std::string r = MDFN_GetSettingS("ss.region_default");
-        return (r=="eu") ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
-    } catch(...) { return RETRO_REGION_NTSC; }
+    /* From the loaded game's actual refresh rate: ss.region_default is ignored
+     * whenever region autodetect is on (the default). */
+    if(!game_info) return RETRO_REGION_NTSC;
+    return (game_info->fps / (65536.0 * 256.0) < 55.0) ? RETRO_REGION_PAL : RETRO_REGION_NTSC;
 }
 RETRO_API void *retro_get_memory_data(unsigned id)
 {
@@ -1199,9 +1195,9 @@ RETRO_API size_t retro_get_memory_size(unsigned id)
     default: return 0;
     }
 }
-RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
+/* Each game has one fixed input layout, set up in retro_load_game (two gamepads,
+ * or the gun on port 0 for touchscreen titles); STVIO rejects anything else and
+ * would silently null the port, so the frontend's device choice is ignored. */
+RETRO_API void retro_set_controller_port_device(unsigned, unsigned)
 {
-    if(!initialized || port > 1) return;
-    port_ptr[port] = MDFNI_SetInput(port, (device==5) ? 2 : 1);
-    if(port_ptr[port]) memset(port_ptr[port], 0, 16);
 }
