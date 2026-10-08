@@ -8,6 +8,10 @@
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
 **     -c CPU          pin the main thread to this CPU (Linux)
+**     -r N            savestate round trip after frame N: serialize, run 300
+**                     frames, unserialize, run the same 300 frames again; the
+**                     two video/audio hashes must match (exit 3 otherwise).
+**                     Needs a deterministic core (mednafen_stv_sound_thread=disabled).
 **     -p FILE         sample the program counter (SIGPROF, 1 kHz, all threads)
 **                     and write "<tid> <pc>" lines plus the core's load address
 **                     to FILE; symbolize with nm on the unstripped core
@@ -197,7 +201,7 @@ int main(int argc, char** argv)
 {
  int frames = 600, warm = 0;
  const char* prof_path = NULL;
- int pin_cpu = -1;
+ int pin_cpu = -1, rt_frame = -1;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
  int i = 1;
@@ -210,6 +214,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-q")) quiet = 1;
   else if(!strcmp(argv[i], "-p") && i + 1 < argc) prof_path = argv[++i];
   else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
+  else if(!strcmp(argv[i], "-r") && i + 1 < argc) rt_frame = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
@@ -249,9 +254,13 @@ int main(int argc, char** argv)
  typedef void (*retro_unload_game_t)(void);
  typedef void (*retro_run_t)(void);
  typedef void (*retro_get_system_av_info_t)(struct retro_system_av_info*);
+ typedef size_t (*retro_serialize_size_t)(void);
+ typedef bool (*retro_serialize_t)(void*, size_t);
+ typedef bool (*retro_unserialize_t)(const void*, size_t);
  SYM(retro_set_environment) SYM(retro_set_video_refresh) SYM(retro_set_audio_sample) SYM(retro_set_audio_sample_batch)
  SYM(retro_set_input_poll) SYM(retro_set_input_state) SYM(retro_init) SYM(retro_deinit) SYM(retro_load_game)
  SYM(retro_unload_game) SYM(retro_run) SYM(retro_get_system_av_info)
+ SYM(retro_serialize_size) SYM(retro_serialize) SYM(retro_unserialize)
 
  retro_set_environment(env_cb);
  retro_init();
@@ -277,6 +286,36 @@ int main(int argc, char** argv)
   if(f >= warm) { t_total += dt; t_win += dt; c_total += dc; if(dt > tmax) tmax = dt; }
   if(!quiet && (f + 1) % 300 == 0) { fprintf(stderr, "frame %6d  %.2f ms/frame (window)\n", f + 1, t_win / 300.0); t_win = 0; }
  }
+ int rt_fail = 0;
+ if(rt_frame >= 0)
+ {
+  /* Savestate round trip (see -r). */
+  const size_t sz = retro_serialize_size();
+  void* st = malloc(sz ? sz : 1);
+  void* st2 = malloc(sz ? sz : 1);
+  for(int f = frames; f < rt_frame; f++) retro_run();
+  if(!sz || !retro_serialize(st, sz)) { fprintf(stderr, "roundtrip: serialize failed (size %zu)\n", sz); rt_fail = 1; }
+  else
+  {
+   uint64_t h[2];
+   for(int pass = 0; pass < 2; pass++)
+   {
+    if(pass == 1 && !retro_unserialize(st, sz)) { fprintf(stderr, "roundtrip: unserialize failed\n"); rt_fail = 1; break; }
+    vhash = ahash = 1469598103934665603ULL;
+    for(int f = 0; f < 300; f++) retro_run();
+    h[pass] = vhash ^ (ahash * 31);
+   }
+   /* the restored state must serialize back to the same bytes */
+   if(!rt_fail)
+   {
+    retro_unserialize(st, sz);
+    if(!retro_serialize(st2, sz) || memcmp(st, st2, sz)) { fprintf(stderr, "roundtrip: re-serialized state differs\n"); rt_fail = 1; }
+   }
+   if(!rt_fail && h[0] != h[1]) { fprintf(stderr, "roundtrip: replay differs (%016llx vs %016llx)\n", (unsigned long long)h[0], (unsigned long long)h[1]); rt_fail = 1; }
+   if(!rt_fail) fprintf(stderr, "roundtrip: OK (state %zu bytes, replay hash %016llx)\n", sz, (unsigned long long)h[0]);
+  }
+  free(st); free(st2);
+ }
  const int timed = frames > warm ? frames - warm : 1;
  if(prof_path) prof_dump(prof_path, h);
  print_thread_cpu(stderr, frames);
@@ -286,5 +325,5 @@ int main(int argc, char** argv)
  retro_unload_game();
  retro_deinit();
  dlclose(h);
- return 0;
+ return rt_fail ? 3 : 0;
 }
