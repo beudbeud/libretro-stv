@@ -7,12 +7,16 @@
 **     -o key=value    core option (repeatable), e.g. -o mednafen_stv_autortc=disabled
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
+**     -p FILE         sample the program counter (SIGPROF, 1 kHz, all threads)
+**                     and write "<tid> <pc>" lines plus the core's load address
+**                     to FILE; symbolize with nm on the unstripped core
 **
 ** Prints one line per 300 frames (ms/frame) and a final summary:
 **   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X
 ** The hashes let two runs be compared (e.g. DSP JIT on/off, before/after a
 ** change) without any display; the timing is a headless benchmark.
 */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +24,11 @@
 #include <stdarg.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <signal.h>
+#include <sys/time.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <ucontext.h>
 #include "libretro/libretro.h"
 
 static struct { char key[64]; char val[64]; } opts[32];
@@ -30,11 +39,62 @@ static uint64_t vhash = 1469598103934665603ULL, ahash = 1469598103934665603ULL;
 static uint64_t nsamples, nframes_video;
 static unsigned cur_w, cur_h;
 
+/* --- sampling profiler --- */
+#define PROF_MAX (1 << 21)
+static uintptr_t* prof_pc;
+static int* prof_tid;
+static volatile unsigned prof_n;
+static void prof_handler(int sig, siginfo_t* si, void* uc)
+{
+ (void)sig; (void)si;
+ unsigned i = prof_n;
+ if(i < PROF_MAX)
+ {
+#if defined(__aarch64__)
+  prof_pc[i] = ((ucontext_t*)uc)->uc_mcontext.pc;
+#elif defined(__x86_64__)
+  prof_pc[i] = ((ucontext_t*)uc)->uc_mcontext.gregs[REG_RIP];
+#else
+  prof_pc[i] = 0;
+#endif
+  prof_tid[i] = (int)syscall(SYS_gettid);
+  prof_n = i + 1;
+ }
+}
+static void prof_start(void)
+{
+ prof_pc = malloc(PROF_MAX * sizeof(*prof_pc));
+ prof_tid = malloc(PROF_MAX * sizeof(*prof_tid));
+ struct sigaction sa; memset(&sa, 0, sizeof(sa));
+ sa.sa_sigaction = prof_handler; sa.sa_flags = SA_SIGINFO | SA_RESTART;
+ sigaction(SIGPROF, &sa, NULL);
+ struct itimerval it = { { 0, 1000 }, { 0, 1000 } };
+ setitimer(ITIMER_PROF, &it, NULL);
+}
+static void prof_dump(const char* path, void* core_handle)
+{
+ struct itimerval it = { { 0, 0 }, { 0, 0 } };
+ setitimer(ITIMER_PROF, &it, NULL);
+ Dl_info di; memset(&di, 0, sizeof(di));
+ void* sym = dlsym(core_handle, "retro_run");
+ if(sym) dladdr(sym, &di);
+ FILE* f = fopen(path, "w");
+ if(!f) { perror(path); return; }
+ fprintf(f, "base %lx\n", (unsigned long)di.dli_fbase);
+ for(unsigned i = 0; i < prof_n; i++) fprintf(f, "%d %lx\n", prof_tid[i], (unsigned long)prof_pc[i]);
+ fclose(f);
+ fprintf(stderr, "profile: %u samples -> %s\n", prof_n, path);
+}
+
+/* FNV-1a over 64-bit words (byte-wise would cost ~1.3 ms per 480i frame and
+** skew the timing); the tail bytes are hashed one by one. */
 static void fnv(uint64_t* h, const void* p, size_t n)
 {
  const uint8_t* b = (const uint8_t*)p;
  uint64_t x = *h;
- for(size_t i = 0; i < n; i++) { x ^= b[i]; x *= 1099511628211ULL; }
+ size_t i = 0;
+ for(; i + 8 <= n; i += 8) { uint64_t w; memcpy(&w, b + i, 8); x ^= w; x *= 1099511628211ULL; }
+ for(; i < n; i++) { x ^= b[i]; x *= 1099511628211ULL; }
  *h = x;
 }
 
@@ -101,6 +161,7 @@ static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &
 int main(int argc, char** argv)
 {
  int frames = 600, warm = 0;
+ const char* prof_path = NULL;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
  int i = 1;
@@ -111,6 +172,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-s") && i + 1 < argc) snprintf(sysdir, sizeof(sysdir), "%s", argv[++i]);
   else if(!strcmp(argv[i], "-S") && i + 1 < argc) snprintf(savedir, sizeof(savedir), "%s", argv[++i]);
   else if(!strcmp(argv[i], "-q")) quiet = 1;
+  else if(!strcmp(argv[i], "-p") && i + 1 < argc) prof_path = argv[++i];
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
@@ -121,7 +183,7 @@ int main(int argc, char** argv)
   }
   else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
  }
- if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-q] core.so rom\n", argv[0]); return 2; }
+ if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-q] [-p prof] core.so rom\n", argv[0]); return 2; }
  const char* core = argv[i], *rom = argv[i + 1];
  if(!sysdir[0])
  {
@@ -166,6 +228,7 @@ int main(int argc, char** argv)
  double t_total = 0, t_win = 0, tmax = 0;
  for(int f = 0; f < frames; f++)
  {
+  if(prof_path && f == warm) prof_start();
   const double t0 = now_ms();
   retro_run();
   const double dt = now_ms() - t0;
@@ -173,8 +236,9 @@ int main(int argc, char** argv)
   if(!quiet && (f + 1) % 300 == 0) { fprintf(stderr, "frame %6d  %.2f ms/frame (window)\n", f + 1, t_win / 300.0); t_win = 0; }
  }
  const int timed = frames > warm ? frames - warm : 1;
- printf("frames=%d video=%016llx audio=%016llx samples=%llu ms/frame=%.3f max=%.2f\n",
-        frames, (unsigned long long)vhash, (unsigned long long)ahash, (unsigned long long)nsamples, t_total / timed, tmax);
+ if(prof_path) prof_dump(prof_path, h);
+ printf("frames=%d video=%016llx audio=%016llx samples=%llu ms/frame=%.3f max=%.2f geometry=%ux%u\n",
+        frames, (unsigned long long)vhash, (unsigned long long)ahash, (unsigned long long)nsamples, t_total / timed, tmax, cur_w, cur_h);
 
  retro_unload_game();
  retro_deinit();
