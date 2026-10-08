@@ -1,3 +1,4 @@
+#include <time.h>
 /* libretro.cpp — mednafen Saturn/ST-V libretro core */
 
 #include "libretro.h"
@@ -929,9 +930,35 @@ RETRO_API void retro_unload_game(void)
 
 RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
 
+/* MDFN_SS_FRAMESTATS=1: every 300 frames, log the real frame rate (interval
+ * between retro_run calls, i.e. what the frontend achieves) and the time spent
+ * inside the core. For measuring on target without a profiler. */
+static void frame_stats(bool begin)
+{
+    static int enabled = -1;
+    static double t_begin, t_last, core_ms, core_max, wall_ms;
+    static unsigned n;
+    if(enabled < 0) enabled = getenv("MDFN_SS_FRAMESTATS") != nullptr;
+    if(!enabled) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double now = ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+    if(begin) {
+        if(t_last > 0) wall_ms += now - t_last;
+        t_last = t_begin = now;
+        return;
+    }
+    const double c = now - t_begin;
+    core_ms += c; if(c > core_max) core_max = c;
+    if(++n == 300) {
+        fprintf(stderr, "[stv framestats] fps=%.2f core_ms=%.2f core_max=%.2f\n", 1000.0 * 299 / wall_ms, core_ms / n, core_max);
+        n = 0; core_ms = core_max = wall_ms = 0; t_last = 0;
+    }
+}
+
 RETRO_API void retro_run(void)
 {
     if(!game_info || !surf) return;
+    frame_stats(true);
     bool opts = false;
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE,&opts) && opts) {
         apply_options();
@@ -1123,6 +1150,8 @@ RETRO_API void retro_run(void)
      * Suppress output on throwaway frames (run-ahead) so they don't emit duplicate audio. */
     if(audio_enabled && espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
         audio_batch_cb(espec.SoundBuf, (size_t)espec.SoundBufSize);
+
+    frame_stats(false);
 }
 
 RETRO_API size_t retro_serialize_size(void)
