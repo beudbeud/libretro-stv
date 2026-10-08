@@ -84,3 +84,8 @@ configure_file(${CMAKE_SOURCE_DIR}/libretro/config_libretro.h
 
 add_subdirectory(mednafen)
 add_subdirectory(libretro)
+
+option(STV_BUILD_TESTS "Build the headless tests in tests/" OFF)
+if(STV_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
