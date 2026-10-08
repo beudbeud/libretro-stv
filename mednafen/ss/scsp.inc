@@ -1300,10 +1300,8 @@ void SS_SCSP::DecodeMPROG(void)
  DSP.MPROG_Dirty = false;
 }
 
-INLINE void SS_SCSP::RunDSP(void)
+INLINE void SS_SCSP::RunDSP_Interp(void)
 {
- if(DSP.MPROG_Dirty)
-  DecodeMPROG();
 
  //
  //
@@ -1437,7 +1435,18 @@ INLINE void SS_SCSP::RunDSP(void)
   else if(DSP.WritePending)
   {
    if(!(DSP.RWAddr & 0x40000))
+   {
+#if MDFN_SS_SCSP_DSP_JIT
+    if(MDFN_UNLIKELY(DSPJIT_Verify) && DSPJIT_VerifyLogN < 128)
+    {
+     DSPJIT_VerifyLog[DSPJIT_VerifyLogN].addr = DSP.RWAddr;
+     DSPJIT_VerifyLog[DSPJIT_VerifyLogN].old = RAM[DSP.RWAddr];
+     DSPJIT_VerifyLog[DSPJIT_VerifyLogN].cur = DSP.WriteValue;
+     DSPJIT_VerifyLogN++;
+    }
+#endif
     RAM[DSP.RWAddr] = DSP.WriteValue;
+   }
 
    DSP.WritePending = false;
   }
@@ -1486,6 +1495,224 @@ INLINE void SS_SCSP::RunDSP(void)
  DSP.MDEC_CT--;
 }
 #endif
+
+#if MDFN_SS_SCSP_DSP_JIT
+ #include "scsp_dspjit.inc"
+#endif
+
+void SS_SCSP::SetDSPJIT(bool enable, bool verify)
+{
+#if MDFN_SS_SCSP_DSP_JIT
+ DSPJIT_Enable = enable;
+ DSPJIT_Verify = verify;
+ DSP.MPROG_Dirty = true;
+#else
+ (void)enable; (void)verify;
+#endif
+}
+
+INLINE void SS_SCSP::RunDSP(void)
+{
+ bool recompile = false;
+
+ if(DSP.MPROG_Dirty)
+ {
+  DecodeMPROG();
+  recompile = true;
+ }
+
+#if MDFN_SS_SCSP_DSP_JIT
+ if(DSPJIT_Enable && (recompile || !DSPJIT.Ready()) && !DSPJIT.Compile(this))
+  DSPJIT_Enable = false;	// no executable memory: stay on the interpreter
+
+ if(DSPJIT_Enable)
+ {
+  if(MDFN_LIKELY(!DSPJIT_Verify))
+  {
+   DSPJIT.Run(this);
+   return;
+  }
+
+  // Verify: interpreter first (reference, logging its RAM writes), undo those
+  // writes, then the JIT from the same pre-state; both end states must match,
+  // including the RAM words the interpreter wrote.
+  const DSPS pre = DSP;
+  DSPJIT_VerifyLogN = 0;
+  RunDSP_Interp();
+  const DSPS ref = DSP;
+  for(unsigned i = DSPJIT_VerifyLogN; i-- > 0;)
+   RAM[DSPJIT_VerifyLog[i].addr] = DSPJIT_VerifyLog[i].old;
+  DSP = pre;
+  DSPJIT.Run(this);
+  const DSPS jit = DSP;
+  bool ram_ok = true;
+  for(unsigned i = 0; i < DSPJIT_VerifyLogN; i++)
+   if(RAM[DSPJIT_VerifyLog[i].addr] != DSPJIT_VerifyLog[i].cur)
+    ram_ok = false;
+  DSP = ref;	// keep the reference state either way
+  if(!DSPJIT_VerifyFailed && (!ram_ok || memcmp(&DSP, &jit, offsetof(DSPS, MPROG_Dirty)) != 0))
+  {
+   if(!ram_ok)
+    MDFN_printf("SCSP DSP JIT verify: RAM writes differ\n");
+   DSPJIT_VerifyFailed = true;
+   MDFN_Notify(MDFN_NOTICE_WARNING, "SCSP DSP JIT verify: divergence from interpreter (see log)");
+   #define VCHK(field) if(memcmp(&DSP.field, &jit.field, sizeof(DSP.field))) MDFN_printf("SCSP DSP JIT verify: %s differs (interp=%x jit=%x)\n", #field, (unsigned)DSP.field, (unsigned)jit.field);
+   VCHK(INPUTS) VCHK(SFT_REG) VCHK(FRC_REG) VCHK(Y_REG) VCHK(ADRS_REG)
+   VCHK(MDEC_CT) VCHK(RWAddr) VCHK(WritePending) VCHK(WriteValue) VCHK(ReadPending) VCHK(ReadValue)
+   #undef VCHK
+   #define ACHK(field, n) for(unsigned k = 0, shown = 0; k < (n) && shown < 4; k++) if(DSP.field[k] != jit.field[k]) { MDFN_printf("SCSP DSP JIT verify: %s[%u] differs (interp=%x jit=%x)\n", #field, k, (unsigned)DSP.field[k], (unsigned)jit.field[k]); shown++; }
+   ACHK(TEMP, 0x80) ACHK(MEMS, 0x20) ACHK(EFREG, 0x10)
+   #undef ACHK
+   {
+    int last = -1, nlive = 0;
+    for(unsigned i = 0; i < 128; i++) if(DSP.MPROG_Decoded[i].live) { last = i; nlive++; }
+    MDFN_printf("SCSP DSP JIT verify: recompiled=%d live=%d last=%d pre: MDEC_CT=%x RP=%u WP=%u RWAddr=%x RBL=%u RBP=%u\n", recompile, nlive, last, pre.MDEC_CT, pre.ReadPending, pre.WritePending, pre.RWAddr, RBL, RBP);
+    if(last >= 0)
+    {
+     const DSPStep& d = DSP.MPROG_Decoded[last];
+     MDFN_printf("SCSP DSP JIT verify: last step flags=%05x IRA=%02x MASA=%02x MADRS=%x TWA=%02x TRA=%02x YSEL=%u\n", d.flags, d.IRA, d.MASA, DSP.MADRS[d.MASA], d.TWA, d.TRA, d.YSEL);
+    }
+   }
+  }
+  return;
+ }
+#endif
+
+ (void)recompile;
+ RunDSP_Interp();
+}
+
+unsigned SS_SCSP::DSPJIT_Fuzz(unsigned iterations, unsigned seed, uint64 clear_mask, uint64 set_mask)
+{
+#if MDFN_SS_SCSP_DSP_JIT
+ std::unique_ptr<SS_SCSP> sp(new SS_SCSP());
+ SS_SCSP& s = *sp;
+ uint64 rng = 0x9E3779B97F4A7C15ULL ^ seed;
+ auto rnd = [&rng](void) -> uint32 { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (uint32)(rng >> 16); };
+ unsigned mismatches = 0;
+
+ s.DSPJIT_Enable = true;
+ s.DSPJIT_Verify = false;
+
+ for(unsigned it = 0; it < iterations; it++)
+ {
+  // Random program. Bias towards a plausible mix: some steps full-random,
+  // most with memory access bits cleared so arithmetic dominates.
+  for(unsigned i = 0; i < 128; i++)
+  {
+   uint64 v = ((uint64)rnd() << 32) | rnd();
+   if(rnd() & 3)
+    v &= ~((1ULL << 29) | (1ULL << 30));	// no MRT/MWT
+   s.DSP.MPROG[i] = (v & ~clear_mask) | set_mask;
+  }
+  // Decode and compile up front so both paths see the same decoded program.
+  s.DecodeMPROG();
+  if(!s.DSPJIT.Compile(&s))
+  {
+   MDFN_printf("SCSP DSP JIT fuzz: compile failed\n");
+   return ~0U;
+  }
+
+  for(unsigned i = 0; i < 0x80; i++) s.DSP.TEMP[i] = rnd() & 0xFFFFFF;
+  for(unsigned i = 0; i < 0x20; i++) s.DSP.MEMS[i] = rnd() & 0xFFFFFF;
+  for(unsigned i = 0; i < 64; i++)   s.DSP.COEF[i] = rnd() & 0x1FFF;
+  for(unsigned i = 0; i < 32; i++)   s.DSP.MADRS[i] = rnd() & 0xFFFF;
+  for(unsigned i = 0; i < 0x10; i++) s.DSP.MIXS[i] = rnd() & 0xFFFFF;
+  for(unsigned i = 0; i < 0x10; i++) s.DSP.EFREG[i] = rnd() & 0xFFFF;
+  s.EXTS[0] = rnd(); s.EXTS[1] = rnd();
+  s.DSP.INPUTS = rnd() & 0xFFFFFF;
+  s.DSP.SFT_REG = rnd() & 0x3FFFFFF;
+  s.DSP.FRC_REG = rnd() & 0x1FFF;
+  s.DSP.Y_REG = rnd() & 0xFFFFFF;
+  s.DSP.ADRS_REG = rnd() & 0xFFF;
+  s.DSP.MDEC_CT = rnd() & 0xFFFF;
+  s.DSP.RWAddr = rnd() & 0x7FFFF;
+  s.DSP.WritePending = (rnd() & 3) == 0;
+  s.DSP.WriteValue = rnd();
+  s.DSP.ReadPending = s.DSP.WritePending ? 0 : (rnd() % 3);
+  s.DSP.ReadValue = rnd() & 0xFFFFFF;
+  s.RBL = rnd() & 3;
+  s.RBP = rnd() & 0x3F;	// keeps the addressable window [RBP<<12, +0x10000) from wrapping
+  const uint32 win = (uint32)s.RBP << 12;
+  for(unsigned i = 0; i < 4096; i++)
+   s.RAM[win + (rnd() & 0xFFFF)] = rnd();
+  s.DSP.RWAddr = win + (rnd() & 0xFFFF);
+  std::unique_ptr<uint16[]> ram_pre(new uint16[0x10000]), ram_jit(new uint16[0x10000]);
+
+  // A few samples so the pipeline and MDEC_CT carry across runs; the program
+  // is sometimes rewritten between samples, as the 68K does, with pending
+  // accesses carried into the new program.
+  for(unsigned n = 0; n < 6; n++)
+  {
+   if(n > 0 && (rnd() & 1))
+   {
+    const unsigned cnt = 1 + (rnd() & 15);
+    for(unsigned k = 0; k < cnt; k++)
+    {
+     uint64 v = ((uint64)rnd() << 32) | rnd();
+     if(rnd() & 3)
+      v &= ~((1ULL << 29) | (1ULL << 30));
+     s.DSP.MPROG[rnd() & 0x7F] = (v & ~clear_mask) | set_mask;
+    }
+    s.DecodeMPROG();
+    if(!s.DSPJIT.Compile(&s))
+    {
+     MDFN_printf("SCSP DSP JIT fuzz: compile failed\n");
+     return ~0U;
+    }
+   }
+   // Both runs start from the same RAM window and must leave it identical.
+   const DSPS pre = s.DSP;
+   memcpy(ram_pre.get(), &s.RAM[win], 0x10000 * sizeof(uint16));
+   s.RunDSP();		// JIT path (program already compiled)
+   const DSPS jit = s.DSP;
+   memcpy(ram_jit.get(), &s.RAM[win], 0x10000 * sizeof(uint16));
+   bool ok = true;
+
+   s.DSP = pre;
+   memcpy(&s.RAM[win], ram_pre.get(), 0x10000 * sizeof(uint16));
+   s.RunDSP_Interp();
+   if(memcmp(&s.DSP, &jit, offsetof(DSPS, MPROG_Dirty)) != 0)
+    ok = false;
+   if(memcmp(&s.RAM[win], ram_jit.get(), 0x10000 * sizeof(uint16)) != 0)
+   {
+    if(ok && !mismatches)
+     MDFN_printf("SCSP DSP JIT fuzz: RAM differs (iteration %u sample %u)\n", it, n);
+    ok = false;
+   }
+
+   if(!ok)
+   {
+    if(!mismatches)
+    {
+     MDFN_printf("SCSP DSP JIT fuzz: mismatch at iteration %u sample %u (seed %u, RBL=%u RBP=%u)\n", it, n, seed, s.RBL, s.RBP);
+     #define VCHK(field) if(memcmp(&s.DSP.field, &jit.field, sizeof(s.DSP.field))) MDFN_printf("  %s differs: interp=%x jit=%x\n", #field, (unsigned)s.DSP.field, (unsigned)jit.field);
+     VCHK(INPUTS) VCHK(SFT_REG) VCHK(FRC_REG) VCHK(Y_REG) VCHK(ADRS_REG)
+     VCHK(MDEC_CT) VCHK(RWAddr) VCHK(WritePending) VCHK(WriteValue) VCHK(ReadPending) VCHK(ReadValue)
+     #undef VCHK
+     #define ACHK(field, n) for(unsigned k = 0, shown = 0; k < (n) && shown < 4; k++) if(s.DSP.field[k] != jit.field[k]) { MDFN_printf("  %s[%u] differs: interp=%x jit=%x\n", #field, k, (unsigned)s.DSP.field[k], (unsigned)jit.field[k]); shown++; }
+     ACHK(TEMP, 0x80) ACHK(MEMS, 0x20) ACHK(EFREG, 0x10)
+     #undef ACHK
+     MDFN_printf("  pre: MDEC_CT=%x RP=%u WP=%u RWAddr=%x\n", pre.MDEC_CT, pre.ReadPending, pre.WritePending, pre.RWAddr);
+     for(unsigned i = 0; i < 128; i++)
+      if(s.DSP.MPROG_Decoded[i].live)
+      {
+       const DSPStep& d = s.DSP.MPROG_Decoded[i];
+       MDFN_printf("  step %3u: flags=%05x IRA=%02x IWA=%02x EWA=%x MASA=%02x CRA=%02x TWA=%02x TRA=%02x YSEL=%u\n", i, d.flags, d.IRA, d.IWA, d.EWA, d.MASA, d.CRA, d.TWA, d.TRA, d.YSEL);
+      }
+    }
+    mismatches++;
+    break;
+   }
+  }
+ }
+ MDFN_printf("SCSP DSP JIT fuzz: %u iterations, %u mismatches\n", iterations, mismatches);
+ return mismatches;
+#else
+ (void)iterations; (void)seed;
+ return 0;
+#endif
+}
 //
 //
 //

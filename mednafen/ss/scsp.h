@@ -19,9 +19,22 @@
 ** 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
+#include "scsp_dspjit.h"
+
 class SS_SCSP
 {
+#if MDFN_SS_SCSP_DSP_JIT
+ friend class SS_SCSP_DSPJIT;
+#endif
  public:
+
+ // DSP JIT control (see scsp_dspjit.h). verify runs the interpreter alongside
+ // the JIT every sample and logs the first divergence; debug use only.
+ void SetDSPJIT(bool enable, bool verify);
+
+ // Random programs/states, JIT vs interpreter. Returns the number of
+ // mismatching iterations (0 = pass). Logs details on the first mismatch.
+ static unsigned DSPJIT_Fuzz(unsigned iterations, unsigned seed, uint64 clear_mask = 0, uint64 set_mask = 0) MDFN_COLD;
 
  SS_SCSP() MDFN_COLD;
  ~SS_SCSP() MDFN_COLD;
@@ -267,7 +280,18 @@ class SS_SCSP
  uint8 RBP;
  uint8 RBL;
  void RunDSP(void);
+ void RunDSP_Interp(void);
  void DecodeMPROG(void);
+#if MDFN_SS_SCSP_DSP_JIT
+ SS_SCSP_DSPJIT DSPJIT;
+ bool DSPJIT_Enable = false;
+ bool DSPJIT_Verify = false;
+ bool DSPJIT_VerifyFailed = false;
+ // Verify mode: the interpreter's RAM writes, so they can be undone before
+ // the JIT replays the sample on the same RAM (read-after-write exactness).
+ struct { uint32 addr; uint16 old, cur; } DSPJIT_VerifyLog[128];
+ unsigned DSPJIT_VerifyLogN = 0;
+#endif
 
  struct DSPStep
  {

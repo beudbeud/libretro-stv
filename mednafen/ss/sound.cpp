@@ -112,6 +112,30 @@ void SOUND_Init(bool stv_mapping)
 
  MIDI_Out = nullptr;
 
+#if MDFN_SS_SCSP_DSP_JIT
+ {
+  // MDFN_SS_DSPJIT=verify|off|fuzz[:N] for debugging; the setting is the normal control.
+  const char* dj = getenv("MDFN_SS_DSPJIT");
+#ifdef MDFN_SSFPLAY_COMPILE
+  bool enable = true;
+#else
+  bool enable = MDFN_GetSettingB("ss.scsp.dsp_jit");
+#endif
+  bool verify = false;
+  if(dj)
+  {
+   if(!strcmp(dj, "off"))         enable = false;
+   else if(!strcmp(dj, "verify")) verify = true;
+   else if(!strncmp(dj, "fuzz", 4))
+   {
+    const unsigned n = (dj[4] == ':') ? (unsigned)atoi(dj + 5) : 2000;
+    SS_SCSP::DSPJIT_Fuzz(n, 1);
+   }
+  }
+  SCSP.SetDSPJIT(enable, verify);
+ }
+#endif
+
  if(stv_mapping)
  {
   SoundCPU.BusRead8 = SoundCPU_BusRead<uint8, true>;
@@ -579,5 +603,13 @@ void SOUND_SetM68KRegister(const unsigned id, const uint32 value)
 }
 
 
-}
 
+#ifndef MDFN_SSFPLAY_COMPILE
+// Entry point for tests/dspjit_fuzz_test.cpp (headless, no frontend).
+unsigned SOUND_DSPJIT_Fuzz(unsigned iterations, unsigned seed, uint64 clear_mask, uint64 set_mask)
+{
+ return SS_SCSP::DSPJIT_Fuzz(iterations, seed, clear_mask, set_mask);
+}
+#endif
+
+}
