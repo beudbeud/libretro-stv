@@ -2514,6 +2514,7 @@ static const MDFNSetting SSSettings[] =
 	gettext_noop("0 is lowest quality and CPU usage, 10 is highest quality and CPU usage.  The resampler that this setting refers to is used for converting from 44.1KHz to the sampling rate of the host audio device Mednafen is using.  Changing Mednafen's output rate, via the \"\5sound.rate\" setting, to \"44100\" may bypass the resampler, which can decrease CPU usage by Mednafen, and can increase or decrease audio quality, depending on various operating system and hardware factors."), MDFNST_UINT, "4", "0", "10" },
 
  { "ss.region_autodetect", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Attempt to auto-detect region of game."), NULL, MDFNST_BOOL, "1" },
+ { "ss.sound.threaded", MDFNSF_NOFLAGS, gettext_noop("Run the 68K and SCSP on a separate thread."), gettext_noop("Same command ordering as the inline path; the 68K may observe an SH-2 sound RAM write a few microseconds early."), MDFNST_BOOL, "1" },
  { "ss.scsp.dsp_jit", MDFNSF_NOFLAGS, gettext_noop("Compile the SCSP DSP program to native code."), gettext_noop("AArch64 only; the interpreter is used elsewhere. Bit-exact, no effect on emulation state."), MDFNST_BOOL, "1" },
  { "ss.region_default", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Default region to use."), gettext_noop("Used if region autodetection fails or is disabled."), MDFNST_ENUM, "jp", NULL, NULL, NULL, NULL, Region_List },
 
@@ -2563,6 +2564,7 @@ static const MDFNSetting SSSettings[] =
  { "ss.slstartp", MDFNSF_NOFLAGS, gettext_noop("First displayed scanline in PAL mode."), NULL, MDFNST_INT, "0", "-16", "271" },
  { "ss.slendp", MDFNSF_NOFLAGS, gettext_noop("Last displayed scanline in PAL mode."), NULL, MDFNST_INT, "255", "-16", "271" },
 
+ { "ss.affinity.sound", MDFNSF_NOFLAGS, gettext_noop("Sound (68K/SCSP) thread CPU affinity mask."), gettext_noop("Set to 0 to disable changing affinity."), MDFNST_UINT, "0", "0x0000000000000000", "0xFFFFFFFFFFFFFFFF" },
  { "ss.affinity.vdp2", MDFNSF_NOFLAGS, gettext_noop("VDP2 rendering thread CPU affinity mask."), gettext_noop("Set to 0 to disable changing affinity."), MDFNST_UINT, "0", "0x0000000000000000", "0xFFFFFFFFFFFFFFFF" },
 
 #ifdef MDFN_ENABLE_DEV_BUILD

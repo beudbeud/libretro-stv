@@ -27,6 +27,8 @@
 #include <mednafen/mednafen.h>
 #include <mednafen/hw_cpu/m68k/m68k.h>
 #include <mednafen/jump.h>
+#include <mednafen/MThreading.h>
+#include <atomic>
 
 #ifndef MDFN_SSFPLAY_COMPILE
 #include "ss.h"
@@ -63,6 +65,103 @@ static uint32 IBufferCount;
 static int last_rate;
 static bool rax_active = false;
 
+#ifndef MDFN_SSFPLAY_COMPILE
+/*
+** Sound thread. The 68K and SCSP already run behind the SH-2s: SOUND_Update()
+** advances them in 128-cycle slices and the SH-2's SCSP register accesses are
+** applied to that lagging state. A single-producer/single-consumer command
+** queue keeps exactly that ordering (RUN slices and register writes in the
+** order the main thread issued them) while a second core does the work.
+** The main thread waits for the queue to drain only where it needs the
+** results: register reads, the audio output at frame end, timestamp rebases
+** and savestates. Sound RAM stays directly mapped for the SH-2s; the 68K may
+** see one of their writes a few microseconds earlier than it would today,
+** the same class of skew as the existing 128-cycle slicing.
+*/
+enum
+{
+ SCMD_RUN = 0,		/* arg32 = SH-2 timestamp */
+ SCMD_WRITE8,		/* arg32 = address, arg16 = value */
+ SCMD_WRITE16,
+ SCMD_RESET,		/* arg16 = powering_up */
+ SCMD_RESET68K,
+ SCMD_RESETSCSP,
+ SCMD_SET68KACTIVE,	/* arg16 = active */
+ SCMD_CLOCKRATIO,	/* arg32 = ratio */
+ SCMD_EXIT
+};
+
+struct SoundCmd
+{
+ uint32 arg32;
+ uint16 arg16;
+ uint8 cmd;
+};
+
+static const uint32 SQ_SIZE = 1 << 14;
+static SoundCmd SQ[SQ_SIZE];
+/* Producer- and consumer-written counters on their own cache lines. */
+alignas(64) static std::atomic<uint32> SQ_Enq(0);	/* commands pushed (monotonic) */
+alignas(64) static std::atomic<uint32> SQ_Done(0);	/* commands completed (monotonic) */
+alignas(64) static std::atomic<bool> SThreadSleeping(false);
+static uint32 SQ_DoneCached = 0;		/* producer's last view of SQ_Done */
+/* RUN slices are batched: SOUND_Update() records the latest timestamp and
+** only every 8th one is pushed, unless something that must stay ordered
+** behind it (a register write, a drain) flushes it first. */
+static sscpu_timestamp_t SPendingRunTS;
+static bool SPendingRun = false;
+static unsigned SRunBatch = 0;
+/* SCSP->SCU interrupt transitions posted by the thread: bit 0 = rose, bit 1
+** = fell, bit 2 = current level; the main thread replays rise then fall so a
+** pulse inside one slice still reaches the SCU's edge latch. */
+static std::atomic<unsigned> SMainIntEvents(0);
+static bool SThreadWanted = false;		/* setting/env */
+static bool SThreaded = false;			/* thread running and in use */
+static MThreading::Thread* SThread = nullptr;
+static MThreading::Sem* SSem = nullptr;
+
+static INLINE void SoundThread_Push(uint8 cmd, uint32 arg32 = 0, uint16 arg16 = 0)
+{
+ const uint32 e = SQ_Enq.load(std::memory_order_relaxed);
+
+ if(MDFN_UNLIKELY(e - SQ_DoneCached >= SQ_SIZE))
+ {
+  /* Queue possibly full: refresh the view, then wait for the thread. */
+  while((SQ_DoneCached = SQ_Done.load(std::memory_order_acquire)), e - SQ_DoneCached >= SQ_SIZE)
+  {
+  }
+ }
+ SQ[e & (SQ_SIZE - 1)].arg32 = arg32;
+ SQ[e & (SQ_SIZE - 1)].arg16 = arg16;
+ SQ[e & (SQ_SIZE - 1)].cmd = cmd;
+ SQ_Enq.store(e + 1, std::memory_order_release);
+
+ if(MDFN_UNLIKELY(SThreadSleeping.load(std::memory_order_acquire)))
+  MThreading::Sem_Post(SSem);
+}
+
+static INLINE void SoundThread_FlushRun(void)
+{
+ if(SPendingRun)
+ {
+  SPendingRun = false;
+  SoundThread_Push(SCMD_RUN, (uint32)SPendingRunTS);
+ }
+}
+
+static void SoundThread_Drain(void)
+{
+ if(!SThreaded)
+  return;
+ SoundThread_FlushRun();
+ while(SQ_Done.load(std::memory_order_acquire) != SQ_Enq.load(std::memory_order_relaxed))
+ {
+  /* Spin: the thread is usually only microseconds behind. */
+ }
+}
+
+#endif
+
 static INLINE void SCSP_SoundIntChanged(SS_SCSP* s, unsigned level)
 {
  SoundCPU.SetIPL(level);
@@ -71,7 +170,11 @@ static INLINE void SCSP_SoundIntChanged(SS_SCSP* s, unsigned level)
 static INLINE void SCSP_MainIntChanged(SS_SCSP* s, bool state)
 {
  #ifndef MDFN_SSFPLAY_COMPILE
- SCU_SetInt(SCU_INT_SCSP, state);
+ if(SThreaded)
+  if(state) SMainIntEvents.fetch_or(1 | 4, std::memory_order_release);
+  else { SMainIntEvents.fetch_or(2, std::memory_order_release); SMainIntEvents.fetch_and(~4u, std::memory_order_release); }	/* applied by SOUND_Update() */
+ else
+  SCU_SetInt(SCU_INT_SCSP, state);
  #endif
 }
 
@@ -136,6 +239,15 @@ void SOUND_Init(bool stv_mapping)
  }
 #endif
 
+#ifndef MDFN_SSFPLAY_COMPILE
+ {
+  SThreadWanted = MDFN_GetSettingB("ss.sound.threaded");
+  const char* st = getenv("MDFN_SS_SOUND_THREAD");
+  if(st)
+   SThreadWanted = atoi(st) != 0;
+ }
+#endif
+
  if(stv_mapping)
  {
   SoundCPU.BusRead8 = SoundCPU_BusRead<uint8, true>;
@@ -175,41 +287,65 @@ void SOUND_Init(bool stv_mapping)
 
 uint8 SOUND_PeekRAM(uint32 A)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  return ne16_rbo_be<uint8>(SCSP.GetRAMPtr(), A & 0x7FFFF);
 }
 
 void SOUND_PokeRAM(uint32 A, uint8 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  ne16_wbo_be<uint8>(SCSP.GetRAMPtr(), A & 0x7FFFF, V);
 }
 
 uint64 SOUND_PeekMPROG(uint32 A)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  return SCSP.PeekMPROG(A);
 }
 
 void SOUND_PokeMPROG(uint32 A, uint64 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  SCSP.PokeMPROG(A, V);
 }
 
 uint32 SOUND_PeekTEMPRel(uint32 A)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  return SCSP.PeekTEMPRel(A);
 }
 
 void SOUND_PokeTEMPRel(uint32 A, uint32 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  SCSP.PokeTEMPRel(A, V);
 }
 
 uint32 SOUND_PeekMEMS(uint32 A)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  return SCSP.PeekMEMS(A);
 }
 
 void SOUND_PokeMEMS(uint32 A, uint32 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  SCSP.PokeMEMS(A, V);
 }
 
@@ -223,34 +359,72 @@ static INLINE void ResetTS_68K(void)
 
 void SOUND_AdjustTS(const int32 delta)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  ResetTS_68K();
  //
  //
  lastts += delta;
 }
 
-void SOUND_Reset(bool powering_up)
+static INLINE void DoReset(bool powering_up)
 {
  SCSP.Reset(powering_up);
  SoundCPU.Reset(powering_up);
 }
 
+void SOUND_Reset(bool powering_up)
+{
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded) { SoundThread_FlushRun(); SoundThread_Push(SCMD_RESET, 0, powering_up); return; }
+#endif
+ DoReset(powering_up);
+}
+
 void SOUND_Reset68K(void)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded) { SoundThread_FlushRun(); SoundThread_Push(SCMD_RESET68K); return; }
+#endif
  SoundCPU.Reset(false);
 }
 
 void SOUND_ResetSCSP(void)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded) { SoundThread_FlushRun(); SoundThread_Push(SCMD_RESETSCSP); return; }
+#endif
  SCSP.Reset(false);
 }
 
+#ifndef MDFN_SSFPLAY_COMPILE
+static void SoundThread_Stop(void)
+{
+ if(!SThread)
+  return;
+ SoundThread_FlushRun();
+ SoundThread_Push(SCMD_EXIT);
+ MThreading::Thread_Wait(SThread, nullptr);
+ SThread = nullptr;
+ SThreaded = false;
+ MThreading::Sem_Destroy(SSem);
+ SSem = nullptr;
+}
+#endif
+
 void SOUND_Kill(void)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Stop();
+#endif
 }
 
 void SOUND_Set68KActive(bool active)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded) { SoundThread_FlushRun(); SoundThread_Push(SCMD_SET68KACTIVE, 0, active); return; }
+#endif
  SoundCPU.SetExtHalted(!active);
 }
 
@@ -259,10 +433,25 @@ void SOUND_SetRAXActive(bool active)
  rax_active = active;
 }
 
+/*
+** SH-2 side accesses while threaded (games poll sound RAM and the SCSP
+** control block hundreds of times per frame, so waiting for the thread on
+** every read would serialize the two):
+**  - sound RAM (A < 0x100000) is accessed directly, like the fast-mapped
+**    path already does; this also keeps SH-2 read-modify-write sequences
+**    coherent, which queued writes would not;
+**  - register reads are served from the live state without waiting, except
+**    the MIDI input register whose read pops a FIFO;
+**  - register writes are queued so they stay ordered with the RUN slices.
+*/
 uint16 SOUND_Read16(uint32 A)
 {
  uint16 ret;
 
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded && A >= 0x100000 && ((A & 0xFFE) == 0x404))
+  SoundThread_Drain();
+#endif
  SCSP.RW<uint16, false>(A, ret);
 
  return ret;
@@ -270,11 +459,17 @@ uint16 SOUND_Read16(uint32 A)
 
 void SOUND_Write8(uint32 A, uint8 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded && A >= 0x100000) { SoundThread_FlushRun(); SoundThread_Push(SCMD_WRITE8, A, V); return; }
+#endif
  SCSP.RW<uint8, true>(A, V);
 }
 
 void SOUND_Write16(uint32 A, uint16 V)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded && A >= 0x100000) { SoundThread_FlushRun(); SoundThread_Push(SCMD_WRITE16, A, V); return; }
+#endif
  SCSP.RW<uint16, true>(A, V);
 }
 
@@ -321,10 +516,15 @@ static NO_INLINE void RunSCSP(void)
 // Ratio between SH-2 clock and 68K clock (sound clock / 2)
 void SOUND_SetClockRatio(uint32 ratio)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded) { SoundThread_FlushRun(); SoundThread_Push(SCMD_CLOCKRATIO, ratio); return; }
+#endif
  clock_ratio = ratio;
 }
 
-sscpu_timestamp_t SOUND_Update(sscpu_timestamp_t timestamp)
+/* Advances the 68K and SCSP to the given SH-2 timestamp. Runs on the sound
+** thread when threaded, inline otherwise. */
+static void DoRun(sscpu_timestamp_t timestamp)
 {
  run_until_time += ((uint64)(timestamp - lastts) * clock_ratio);
  lastts = timestamp;
@@ -349,6 +549,98 @@ sscpu_timestamp_t SOUND_Update(sscpu_timestamp_t timestamp)
   while(next_scsp_time < (run_until_time >> 32))
    RunSCSP();
  }
+}
+
+#ifndef MDFN_SSFPLAY_COMPILE
+static int SoundThreadEntry(void* data)
+{
+ unsigned idle = 0;
+
+ for(;;)
+ {
+  const uint32 d = SQ_Done.load(std::memory_order_relaxed);
+
+  if(SQ_Enq.load(std::memory_order_acquire) == d)
+  {
+   /* Spin briefly (commands normally arrive every few microseconds), then
+   ** sleep until the producer wakes us. Re-check after announcing the sleep
+   ** so a push that raced with it is not missed. */
+   if(++idle < 4000)
+    continue;
+   SThreadSleeping.store(true, std::memory_order_release);
+   if(SQ_Enq.load(std::memory_order_acquire) == d)
+    MThreading::Sem_TimedWait(SSem, 1);
+   SThreadSleeping.store(false, std::memory_order_release);
+   continue;
+  }
+  idle = 0;
+
+  const SoundCmd c = SQ[d & (SQ_SIZE - 1)];
+  switch(c.cmd)
+  {
+   case SCMD_RUN: DoRun((sscpu_timestamp_t)c.arg32); break;
+   case SCMD_WRITE8: { uint8 v = c.arg16; SCSP.RW<uint8, true>(c.arg32, v); } break;
+   case SCMD_WRITE16: { uint16 v = c.arg16; SCSP.RW<uint16, true>(c.arg32, v); } break;
+   case SCMD_RESET: DoReset(c.arg16); break;
+   case SCMD_RESET68K: SoundCPU.Reset(false); break;
+   case SCMD_RESETSCSP: SCSP.Reset(false); break;
+   case SCMD_SET68KACTIVE: SoundCPU.SetExtHalted(!c.arg16); break;
+   case SCMD_CLOCKRATIO: clock_ratio = c.arg32; break;
+   case SCMD_EXIT: SQ_Done.store(d + 1, std::memory_order_release); return 0;
+  }
+  SQ_Done.store(d + 1, std::memory_order_release);
+ }
+}
+
+static void SoundThread_Start(void)
+{
+ SQ_Enq.store(0); SQ_Done.store(0); SQ_DoneCached = 0;
+ SPendingRun = false; SRunBatch = 0;
+ SThreadSleeping.store(false);
+ SMainIntEvents.store(0);
+ SSem = MThreading::Sem_Create();
+ SThread = MThreading::Thread_Create(SoundThreadEntry, nullptr, "MDFN SS Sound");
+ SThreaded = true;
+
+ const uint64 affinity = MDFN_GetSettingUI("ss.affinity.sound");
+ if(affinity)
+ {
+  try { MThreading::Thread_SetAffinity(SThread, affinity); }
+  catch(std::exception& e) { MDFN_printf("%s\n", e.what()); }
+ }
+}
+#endif
+
+sscpu_timestamp_t SOUND_Update(sscpu_timestamp_t timestamp)
+{
+#ifndef MDFN_SSFPLAY_COMPILE
+ if(SThreaded)
+ {
+  SPendingRunTS = timestamp;
+  SPendingRun = true;
+  if(++SRunBatch >= 8)
+  {
+   SRunBatch = 0;
+   SoundThread_FlushRun();
+  }
+
+  const unsigned ev = SMainIntEvents.exchange(0, std::memory_order_acq_rel);
+  if(ev & 1)
+   SCU_SetInt(SCU_INT_SCSP, true);
+  if((ev & 2) && !(ev & 4))
+   SCU_SetInt(SCU_INT_SCSP, false);
+
+  return timestamp + 128;
+ }
+ /* The RAX cart mixes its own DSP into RunSCSP() and is driven from the main
+ ** thread, so it keeps the inline path. Decided here, once the cart is up. */
+ if(SThreadWanted && !SThread && !rax_active)
+ {
+  SoundThread_Start();
+  return SOUND_Update(timestamp);
+ }
+#endif
+ DoRun(timestamp);
 
  return timestamp + 128;	// FIXME
 }
@@ -361,6 +653,9 @@ void SOUND_StartFrame(double rate, uint32 quality)
 
 int32 SOUND_FlushOutput(int16* SoundBuf, const int32 SoundBufMaxSize, const bool reverse)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  if(SoundBuf && reverse)
  {
   for(unsigned lr = 0; lr < 2; lr++)
@@ -390,6 +685,9 @@ int32 SOUND_FlushOutput(int16* SoundBuf, const int32 SoundBufMaxSize, const bool
 
 void SOUND_StateAction(StateMem* sm, const unsigned load, const bool data_only)
 {
+#ifndef MDFN_SSFPLAY_COMPILE
+ SoundThread_Drain();
+#endif
  SFORMAT StateRegs[] =
  {
   SFVAR(next_scsp_time),

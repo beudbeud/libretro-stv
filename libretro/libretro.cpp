@@ -440,7 +440,8 @@ static void apply_options()
     STR_OPT ("mednafen_stv_slend",        "ss.slend");
     STR_OPT ("mednafen_stv_cart",         "ss.cart");
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
-STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
+    STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
+    BOOL_OPT("mednafen_stv_sound_thread", "ss.sound.threaded");
 #undef BOOL_OPT
 #undef STR_OPT
 
@@ -666,6 +667,20 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
 {
     if(!initialized || !game || !game->path) return false;
     apply_options();
+
+    /* MDFN_SS_SETTINGS="ss.affinity.vdp2=2;ss.sound.threaded=0": raw Mednafen
+     * settings for experiments with tests/stv_headless (no core option needed). */
+    if(const char *env = getenv("MDFN_SS_SETTINGS")) {
+        std::string kv(env);
+        size_t pos = 0;
+        while(pos < kv.size()) {
+            size_t end = kv.find(';', pos); if(end == std::string::npos) end = kv.size();
+            size_t eq = kv.find('=', pos);
+            if(eq != std::string::npos && eq < end)
+                MDFNI_SetSetting(kv.substr(pos, eq - pos).c_str(), kv.substr(eq + 1, end - eq - 1).c_str());
+            pos = end + 1;
+        }
+    }
 
     retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
     if(!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))

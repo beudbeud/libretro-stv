@@ -91,6 +91,9 @@ static struct retro_core_option_v2_definition option_defs_us[] = {
    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
       "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",
       { {"data_cb","Fast (recommended)"},{"full","Full (accurate, slow)"},{NULL,NULL} }, "data_cb" },
+   { "mednafen_stv_sound_thread", "Threaded Sound", NULL,
+      "Runs the sound CPU (68000) and SCSP on a separate core. Faster on multi-core devices, but emulation is no longer bit-for-bit reproducible, which netplay requires. Restart required.", NULL, "performance",
+      { {"enabled","Enabled"},{"disabled","Disabled"},{NULL,NULL} }, "enabled" },
 
    { NULL, NULL, NULL, NULL, NULL, NULL, {{0}}, NULL }
 };

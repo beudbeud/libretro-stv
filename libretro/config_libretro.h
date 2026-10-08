@@ -96,6 +96,14 @@
 #define HAVE_SYS_STAT_H         1
 #define HAVE_SYS_TYPES_H        1
 #define HAVE_PTHREAD_H          1
+/* pthread_{get,set}affinity_np() (MThreading::Thread_SetAffinity): glibc only;
+** bionic lacks the np functions and macOS has no cpu_set_t. */
+#if defined(__linux__) && !defined(__ANDROID__)
+# ifndef _GNU_SOURCE
+#  define _GNU_SOURCE 1
+# endif
+# define PTHREAD_AFFINITY_NP cpu_set_t
+#endif
 /* iconv is only used to transcode PSF tags (PSFLoader.cpp) and is optional.
  * bionic has no iconv at all, and on Windows it would mean an extra libiconv
  * to link, so leave it out on both. */
