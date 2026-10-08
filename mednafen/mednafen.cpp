@@ -2025,6 +2025,7 @@ void MDFNI_Emulate(EmulateSpecStruct *espec)
  //
  //
 
+#ifndef __LIBRETRO__
  if(espec->InterlaceOn)
  {
   if(!PrevInterlaced)
@@ -2035,6 +2036,10 @@ void MDFNI_Emulate(EmulateSpecStruct *espec)
  }
  else
   PrevInterlaced = false;
+#endif
+ /* libretro: the core (libretro.cpp / VDP2 render thread) does all the
+  * deinterlacing; this "video.deinterlacer" pass (weave by default) would
+  * overwrite its output with the previous field. */
 
  ProcessAudio(espec);
 
