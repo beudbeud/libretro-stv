@@ -86,7 +86,7 @@ static struct retro_core_option_v2_definition option_defs_us[] = {
 
    /* ── Performance ── */
    { "mednafen_stv_frameskip", "Frameskip", NULL,
-      "'Auto' skips frames when the frontend signals video is not needed. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame.", NULL, "performance",
+      "'Auto' skips displaying a frame (never more than 3 in a row) when the frontend reports that its audio buffer is about to run dry, i.e. emulation is falling behind; it raises audio latency to about 6 frames so the frontend can tell in time. It also skips every other frame while fast-forwarding. '1'–'5' skips N frames between each rendered frame (manual). 'Disabled' renders every frame. Emulation always runs in full: only the frame upload is saved.", NULL, "performance",
       { {"disabled","Disabled"},{"auto","Auto"},{"1","1"},{"2","2"},{"3","3"},{"4","4"},{"5","5"},{NULL,NULL} }, "disabled" },
    { "mednafen_stv_cpu_cache", "CPU Cache Emulation", NULL,
       "SH-2 cache emulation level. 'Fast' skips instruction cache (recommended). 'Full' emulates both caches accurately but is slower. Restart required.", NULL, "performance",

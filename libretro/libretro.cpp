@@ -164,6 +164,15 @@ enum { FS_NONE = 0, FS_AUTO, FS_MANUAL };
 static int  g_frameskip_type     = FS_NONE;
 static int  g_frameskip_interval = 1;
 static int  g_frameskip_counter  = 0;
+/* FS_AUTO: frontend audio buffer status (RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK). */
+static bool     g_audio_buf_active    = false;
+static unsigned g_audio_buf_occupancy = 0;
+static bool     g_audio_buf_underrun  = false;
+static bool     g_audio_buf_cb_set    = false;	/* callback registered with the frontend */
+static unsigned g_audio_latency_req   = 0;	/* minimum latency to request from retro_run() */
+static bool     g_audio_latency_dirty = false;
+static unsigned g_auto_skipped_in_row = 0;
+static const unsigned FS_AUTO_MAX_IN_ROW = 3;	/* never hide more than 3 frames in a row */
 static bool g_is_fastforwarding  = false;
 
 /* ── Deinterlacer ──────────────────────────────────────────────────────────── */
@@ -410,6 +419,48 @@ static void update_input()
  * truth; libretro_set_core_options() (called from retro_set_environment) handles
  * down-conversion to the v1 and legacy formats. */
 
+static unsigned g_abs_calls, g_abs_occ_min = 100, g_abs_underruns;	/* framestats only */
+static void RETRO_CALLCONV audio_buffer_status_cb(bool active, unsigned occupancy, bool underrun_likely)
+{
+    g_abs_calls++; if(occupancy < g_abs_occ_min) g_abs_occ_min = occupancy; g_abs_underruns += underrun_likely;
+    g_audio_buf_active    = active;
+    g_audio_buf_occupancy = occupancy;
+    g_audio_buf_underrun  = underrun_likely;
+}
+
+/* Registers (FS_AUTO) or unregisters the audio buffer status callback and
+ * schedules the matching minimum audio latency: a deeper buffer gives the
+ * frontend room to report "underrun likely" before an audible gap, which is
+ * what drives the auto frameskip. The latency can only be set from retro_run. */
+static void update_audio_buffer_status(void)
+{
+    const bool want = (g_frameskip_type == FS_AUTO);
+    if(want == g_audio_buf_cb_set)
+        return;
+
+    retro_audio_buffer_status_callback cb = { audio_buffer_status_cb };
+    if(environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, want ? &cb : nullptr))
+    {
+        g_audio_buf_cb_set = want;
+        if(want) {
+            /* 6 frames, rounded up to a multiple of 32 ms (as Beetle cores do). */
+            const double fps = game_info ? (double)game_info->fps / (65536.0 * 256.0) : 59.826;
+            unsigned ms = (unsigned)(6.0 * 1000.0 / fps + 0.5);
+            ms = ((ms + 31) / 32) * 32;
+            g_audio_latency_req = ms;
+        } else {
+            g_audio_latency_req = 0;
+        }
+        g_audio_latency_dirty = true;
+    }
+    else
+        g_audio_buf_cb_set = false;	/* frontend without support: auto = fast-forward only */
+
+    g_audio_buf_active = false;
+    g_audio_buf_underrun = false;
+    g_auto_skipped_in_row = 0;
+}
+
 static void apply_options()
 {
     if(!initialized) return;
@@ -498,6 +549,8 @@ static void apply_options()
             if(g_frameskip_interval > 5) g_frameskip_interval = 5;
         }
         g_frameskip_counter = 0;
+        if(game_info)
+            update_audio_buffer_status();
     }
 
     /* Deinterlacer: "off" (renderer-side bob) and "blend" run on the VDP2
@@ -697,6 +750,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     game_info = MDFNI_LoadGame("ss", &NVFS, game->path);
     if(!game_info) { lr_log(RETRO_LOG_ERROR,"Load failed: %s\n",game->path); return false; }
 
+    g_audio_buf_cb_set = false;
     /* Re-apply options now that the renderer is up. The first call (above)
      * wrote MDFNI_SetSetting entries that MDFNI_LoadGame needed to read; it
      * also enqueued VDP2REND commands, but VDP2REND_Init (called during
@@ -705,6 +759,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
      * Re-applying here is idempotent for the MDFNI_SetSetting half and
      * correctly takes effect for the VDP2 half. */
     apply_options();
+    update_audio_buffer_status();
 
     /* BIOS skip: build per-game state path from ROM MD5, then try to load it. */
     g_bios_state_saved        = false;
@@ -922,6 +977,10 @@ RETRO_API void retro_unload_game(void)
     g_is_trackball = false;
     s_serialize_size = 0;
     g_frameskip_counter = 0;
+    if(g_audio_buf_cb_set) {
+        environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, nullptr);
+        g_audio_buf_cb_set = false;
+    }
     g_bios_state_saved        = false;
     g_bios_intback_resaved    = false;
     g_bios_service_entered    = false;
@@ -933,11 +992,11 @@ RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
 /* MDFN_SS_FRAMESTATS=1: every 300 frames, log the real frame rate (interval
  * between retro_run calls, i.e. what the frontend achieves) and the time spent
  * inside the core. For measuring on target without a profiler. */
-static void frame_stats(bool begin)
+static void frame_stats(bool begin, bool frame_skipped = false)
 {
     static int enabled = -1;
     static double t_begin, t_last, core_ms, core_max, wall_ms;
-    static unsigned n;
+    static unsigned n, skipped;
     if(enabled < 0) enabled = getenv("MDFN_SS_FRAMESTATS") != nullptr;
     if(!enabled) return;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -949,9 +1008,11 @@ static void frame_stats(bool begin)
     }
     const double c = now - t_begin;
     core_ms += c; if(c > core_max) core_max = c;
+    skipped += frame_skipped;
     if(++n == 300) {
-        fprintf(stderr, "[stv framestats] fps=%.2f core_ms=%.2f core_max=%.2f\n", 1000.0 * 299 / wall_ms, core_ms / n, core_max);
-        n = 0; core_ms = core_max = wall_ms = 0; t_last = 0;
+        fprintf(stderr, "[stv framestats] fps=%.2f core_ms=%.2f core_max=%.2f skipped=%u abuf: cb=%d calls=%u active=%d occ_min=%u underruns=%u\n", 1000.0 * 299 / wall_ms, core_ms / n, core_max, skipped, (int)g_audio_buf_cb_set, g_abs_calls, (int)g_audio_buf_active, g_abs_occ_min, g_abs_underruns);
+        g_abs_calls = 0; g_abs_occ_min = 100; g_abs_underruns = 0;
+        n = skipped = 0; core_ms = core_max = wall_ms = 0; t_last = 0;
     }
 }
 
@@ -993,12 +1054,24 @@ RETRO_API void retro_run(void)
         }
     }
 
+    if(MDFN_UNLIKELY(g_audio_latency_dirty)) {
+        g_audio_latency_dirty = false;
+        environ_cb(RETRO_ENVIRONMENT_SET_MINIMUM_AUDIO_LATENCY, &g_audio_latency_req);
+    }
+
     /* Frameskip: may additionally skip rendering this frame */
     if(g_frameskip_type == FS_AUTO) {
         /* The frontend mutes audio while fast-forwarding, so the AV-enable
          * hint above may not fire; render only every other frame instead. */
         if(g_is_fastforwarding && (g_frameskip_counter ^= 1))
             skip_frame = true;
+        /* At normal speed: skip when the frontend predicts an audio underrun,
+         * i.e. emulation has fallen behind real time. A skipped frame saves the
+         * frontend's video upload (the emulation itself always runs). */
+        else if(!g_is_fastforwarding && g_audio_buf_active && g_audio_buf_underrun
+                && g_auto_skipped_in_row < FS_AUTO_MAX_IN_ROW)
+            skip_frame = true;
+        g_auto_skipped_in_row = skip_frame ? g_auto_skipped_in_row + 1 : 0;
     } else if(g_frameskip_type == FS_MANUAL) {
         if(g_frameskip_counter == 0) {
             g_frameskip_counter = g_frameskip_interval;
@@ -1151,7 +1224,7 @@ RETRO_API void retro_run(void)
     if(audio_enabled && espec.SoundBufSize > 0 && audio_batch_cb && espec.SoundBuf)
         audio_batch_cb(espec.SoundBuf, (size_t)espec.SoundBufSize);
 
-    frame_stats(false);
+    frame_stats(false, skip_frame);
 }
 
 RETRO_API size_t retro_serialize_size(void)
