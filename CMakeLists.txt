@@ -50,10 +50,11 @@ endif()
 
 # Profile-guided optimization (aarch64 GCC only; ~6% less CPU on the Pi 5).
 # The profile in pgo/ is used automatically. To regenerate it after code
-# changes: configure with -DSTV_PGO_GENERATE=/tmp/pgo, run the core on the
-# target through a few minutes of gameplay (decathlt, vfkids), then replace
-# pgo/ with the target's /tmp/pgo/*.gcda. Stale or mismatching profiles
-# only lose the optimization for the affected functions.
+# changes: configure with -DSTV_PGO_GENERATE=/tmp/pgo, then on the target run
+# tests/stv_headless with that core over in-game savestates (-l, 3000 frames
+# each of decathlt and vfkids) and their attract mode (3600 frames), and
+# replace pgo/ with the target's /tmp/pgo/*.gcda. Stale or mismatching
+# profiles only lose the optimization for the affected functions.
 set(STV_PGO_GENERATE "" CACHE PATH "Build an instrumented core writing its profile to this directory")
 option(STV_PGO_USE "Use the profile in pgo/ when present" ON)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
