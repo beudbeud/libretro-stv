@@ -39,7 +39,10 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_C
 
 void Reset(bool powering_up) MDFN_COLD;
 void SetLayerEnableMask(uint64 mask) MDFN_COLD;
-void SetDeinterlaceOff(bool off) MDFN_COLD;
+// 480i handling done on the VDP2 render thread: none (SW deinterlacer or
+// raw fields), bob (line doubling) or blend (fields averaged).
+enum { RDEINT_NONE = 0, RDEINT_BOB = 1, RDEINT_BLEND = 2 };
+void SetRenderDeinterlace(unsigned mode) MDFN_COLD;
 
 sscpu_timestamp_t Update(sscpu_timestamp_t timestamp);
 void AdjustTS(const int32 delta);

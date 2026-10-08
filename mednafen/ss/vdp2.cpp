@@ -1433,9 +1433,9 @@ void SetLayerEnableMask(uint64 mask)
  VDP2REND_SetLayerEnableMask(mask);
 }
 
-void SetDeinterlaceOff(bool off)
+void SetRenderDeinterlace(unsigned mode)
 {
- VDP2REND_SetDeinterlaceOff(off);
+ VDP2REND_SetRenderDeinterlace(mode);
 }
 
 void StateAction(StateMem* sm, const unsigned load, const bool data_only)

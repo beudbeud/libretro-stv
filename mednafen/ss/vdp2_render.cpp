@@ -30,6 +30,7 @@
 #include <mednafen/MThreading.h>
 #include "vdp2_common.h"
 #include "vdp2_render.h"
+#include "vdp2.h"
 
 #include <atomic>
 
@@ -54,13 +55,17 @@ static bool PAL;
 static bool CorrectAspect;
 static bool ShowHOverscan;
 static bool DoHBlend;
-// In-renderer bob: when set, each drawn scanline is also memcpy'd to its
-// opposite-field row of the surface, producing a stable full-resolution
-// progressive image when InterlaceOn. Set via VDP2REND_SetDeinterlaceOff;
-// pairs with libretro option "deinterlacer = off" (renderer-side bob, no
-// SW deinterlacer post-processing). Independent of the SW Deinterlacer
-// classes in mednafen/video/.
-static bool DeinterlaceOff;
+// In-renderer deinterlacing of 480i frames, done on this thread as each line
+// is produced so the main thread pays nothing (VDP2REND_SetRenderDeinterlace):
+//  VDP2::RDEINT_BOB:   each drawn scanline is also copied to its opposite-field row.
+//  VDP2::RDEINT_BLEND: both rows are blended with the previous field's adjacent
+//                lines (kept raw in DeintPrev), like Deinterlacer_Blend.
+// Independent of the SW Deinterlacer classes in mednafen/video/, which are
+// bypassed in these modes.
+static unsigned RenderDeinterlace;
+static uint32 DeintPrev[576][704];	// previous field's raw lines, by surface row
+static uint16 DeintPrevW[576];		// their widths; 0 = none
+static bool DeintPrevStale = true;	// set by progressive lines, clears DeintPrevW
 static int LineVisFirst, LineVisLast;
 static uint32 NextOutLine;
 static bool Clock28M;
@@ -3352,23 +3357,87 @@ static NO_INLINE void DrawLine(const uint16 out_line, const uint16 vdp2_line, co
   assert((espec->DisplayRect.x + espec->LineWidths[out_line]) <= 704);
  }
 
- // In-renderer bob (paired with the libretro "off" deinterlacer option):
- // duplicate the just-rendered scanline onto the opposite-field row so the
- // final surface contains both fields filled with the current frame's data.
- // The SW Deinterlacer is bypassed in this mode -- the frontend sees a
- // progressive full-height frame every emulated frame.
- if(MDFN_UNLIKELY(DeinterlaceOff) && espec->InterlaceOn)
+ // In-renderer deinterlacing (see RenderDeinterlace).
+ if(MDFN_UNLIKELY(RenderDeinterlace != VDP2::RDEINT_NONE))
  {
-  const int32 mirror_line = (int32)out_line ^ 1;
-  const int32 rect_end = espec->DisplayRect.y + espec->DisplayRect.h;
-  if(mirror_line >= espec->DisplayRect.y && mirror_line < rect_end)
+  if(!espec->InterlaceOn)
+   DeintPrevStale = true;
+  else
   {
+   if(DeintPrevStale)
+   {
+    memset(DeintPrevW, 0, sizeof(DeintPrevW));
+    DeintPrevStale = false;
+   }
+
+   // Rows are paired like Deinterlacer_Blend, the same way for both fields:
+   // row r = cur blended with the previous field's line at r-1, row r+1 =
+   // cur blended with the previous field's line at r+1. In bob mode both
+   // rows get cur.
+   const int32 r = (int32)out_line;
+   const int32 rect_top = espec->DisplayRect.y;
+   const int32 rect_end = espec->DisplayRect.y + espec->DisplayRect.h;
    const size_t col_off = (size_t)espec->DisplayRect.x;
-   const size_t copy_pix = (size_t)espec->LineWidths[out_line];
-   const uint32* src_row = espec->surface->pixels + out_line    * espec->surface->pitchinpix + col_off;
-   uint32*       dst_row = espec->surface->pixels + mirror_line * espec->surface->pitchinpix + col_off;
-   memcpy(dst_row, src_row, copy_pix * sizeof(uint32));
-   espec->LineWidths[mirror_line] = espec->LineWidths[out_line];
+   const uint32 w = espec->LineWidths[r];
+   uint32* const cur_row = espec->surface->pixels + r * espec->surface->pitchinpix + col_off;
+   const int32 next = r + 1;
+   const int32 bob_line = r ^ 1;	// bob writes the pair partner
+
+   if(r + 1 < 576 && w <= 704)
+   {
+    if(RenderDeinterlace == VDP2::RDEINT_BLEND)
+    {
+     uint32* const raw = DeintPrev[r];
+     memcpy(raw, cur_row, w * sizeof(uint32));	// this field's raw line, for the next field
+
+     const bool have_up = (r - 1 >= rect_top) && DeintPrevW[r - 1] == w;
+     const bool have_dn = (next < rect_end) && DeintPrevW[next] == w;
+
+     if(have_up || have_dn)
+     {
+      const uint32* const pu = have_up ? DeintPrev[r - 1] : DeintPrev[next];
+      const uint32* const pd = have_dn ? DeintPrev[next] : DeintPrev[r - 1];
+
+      if(next < rect_end)
+      {
+       uint32* const dn_row = espec->surface->pixels + next * espec->surface->pitchinpix + col_off;
+       for(uint32 x = 0; x < w; x++)
+       {
+        const uint32 a = raw[x], b = pu[x], c = pd[x];
+        cur_row[x] = (a & b) + (((a ^ b) & 0xFEFEFEFE) >> 1);
+        dn_row[x] = (a & c) + (((a ^ c) & 0xFEFEFEFE) >> 1);
+       }
+       espec->LineWidths[next] = w;
+      }
+      else
+      {
+       for(uint32 x = 0; x < w; x++)
+       {
+        const uint32 a = raw[x], b = pu[x];
+        cur_row[x] = (a & b) + (((a ^ b) & 0xFEFEFEFE) >> 1);
+       }
+      }
+      // The top row of an odd field has no current line of its own: keep the
+      // previous field's line there.
+      if((r & 1) && r - 1 == rect_top && DeintPrevW[r - 1] == w)
+      {
+       memcpy(espec->surface->pixels + (r - 1) * espec->surface->pitchinpix + col_off, DeintPrev[r - 1], w * sizeof(uint32));
+       espec->LineWidths[r - 1] = w;
+      }
+     }
+     else if(bob_line >= rect_top && bob_line < rect_end)
+     {
+      memcpy(espec->surface->pixels + bob_line * espec->surface->pitchinpix + col_off, raw, w * sizeof(uint32));	// no history yet: bob
+      espec->LineWidths[bob_line] = w;
+     }
+     DeintPrevW[r] = w;
+    }
+    else if(bob_line >= rect_top && bob_line < rect_end)
+    {
+     memcpy(espec->surface->pixels + bob_line * espec->surface->pitchinpix + col_off, cur_row, w * sizeof(uint32));
+     espec->LineWidths[bob_line] = w;
+    }
+   }
   }
  }
 }
@@ -3481,7 +3550,8 @@ static int RThreadEntry(void* data)
 	break;
 
    case COMMAND_SET_DEINTOFF:
-	DeinterlaceOff = (bool)wqe->Arg32;
+	RenderDeinterlace = wqe->Arg32;
+	DeintPrevStale = true;
 	break;
 
    case COMMAND_SET_BUSYWAIT:
@@ -3514,7 +3584,8 @@ void VDP2REND_Init(const bool IsPAL, const uint64 affinity)
  VisibleLines = PAL ? 288 : 240;
  //
  UserLayerEnableMask = ~0U;
- DeinterlaceOff = false;
+ RenderDeinterlace = VDP2::RDEINT_NONE;
+ DeintPrevStale = true;
  Clock28M = false;
  //
  WQ_ReadPos = 0;
@@ -3705,9 +3776,9 @@ void VDP2REND_SetLayerEnableMask(uint64 mask)
  WWQ(COMMAND_SET_LEM, mask);
 }
 
-void VDP2REND_SetDeinterlaceOff(bool off)
+void VDP2REND_SetRenderDeinterlace(unsigned mode)
 {
- WWQ(COMMAND_SET_DEINTOFF, (uint32)off);
+ WWQ(COMMAND_SET_DEINTOFF, mode);
 }
 
 void VDP2REND_Write8_DB(uint32 A, uint16 DB)

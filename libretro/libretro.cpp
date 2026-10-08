@@ -166,7 +166,7 @@ static int  g_frameskip_counter  = 0;
 static bool g_is_fastforwarding  = false;
 
 /* ── Deinterlacer ──────────────────────────────────────────────────────────── */
-/* Sentinel for "renderer-side bob" (VDP2::SetDeinterlaceOff(true)) — bypasses
+/* Sentinel for the render-thread modes (VDP2::SetRenderDeinterlace) — bypasses
  * the SW Deinterlacer. Any other value is a real Deinterlacer enum constant
  * (DEINT_BOB, DEINT_WEAVE, etc.). */
 static constexpr unsigned DEINT_OFF_SENTINEL = ~0u;
@@ -499,23 +499,26 @@ static void apply_options()
         g_frameskip_counter = 0;
     }
 
-    /* Deinterlacer: "off" = renderer-side bob (VDP2 mirrors each scanline
-     * onto the opposite-field row at draw time); other values pick a SW
-     * Deinterlacer post-processor invoked after MDFNI_Emulate.
+    /* Deinterlacer: "off" (renderer-side bob) and "blend" run on the VDP2
+     * render thread as lines are produced (no main-thread cost); the other
+     * values pick a SW Deinterlacer post-processor invoked after
+     * MDFNI_Emulate ("blend_sw" is Mednafen's original blend).
      *
      * Default ("off" / unknown value) is the renderer-side bob. */
     var.key = "mednafen_stv_deinterlacer";
     if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         unsigned new_type = DEINT_OFF_SENTINEL;
-        bool use_renderer_bob = true;
+        unsigned render_mode = MDFN_IEN_SS::VDP2::RDEINT_BOB;
 
-        if     (!strcmp(var.value, "weave"))      { new_type = Deinterlacer::DEINT_WEAVE;      use_renderer_bob = false; }
-        else if(!strcmp(var.value, "bob"))        { new_type = Deinterlacer::DEINT_BOB;        use_renderer_bob = false; }
-        else if(!strcmp(var.value, "bob_offset")) { new_type = Deinterlacer::DEINT_BOB_OFFSET; use_renderer_bob = false; }
-        else if(!strcmp(var.value, "blend"))      { new_type = Deinterlacer::DEINT_BLEND;      use_renderer_bob = false; }
-        else if(!strcmp(var.value, "blend_rg"))   { new_type = Deinterlacer::DEINT_BLEND_RG;   use_renderer_bob = false; }
+        if     (!strcmp(var.value, "weave"))      { new_type = Deinterlacer::DEINT_WEAVE;      render_mode = MDFN_IEN_SS::VDP2::RDEINT_NONE; }
+        else if(!strcmp(var.value, "bob"))        { new_type = Deinterlacer::DEINT_BOB;        render_mode = MDFN_IEN_SS::VDP2::RDEINT_NONE; }
+        else if(!strcmp(var.value, "bob_offset")) { new_type = Deinterlacer::DEINT_BOB_OFFSET; render_mode = MDFN_IEN_SS::VDP2::RDEINT_NONE; }
+        else if(!strcmp(var.value, "blend"))      { render_mode = MDFN_IEN_SS::VDP2::RDEINT_BLEND; }
+        else if(!strcmp(var.value, "blend_sw"))   { new_type = Deinterlacer::DEINT_BLEND;      render_mode = MDFN_IEN_SS::VDP2::RDEINT_NONE; }
+        else if(!strcmp(var.value, "blend_rg"))   { new_type = Deinterlacer::DEINT_BLEND_RG;   render_mode = MDFN_IEN_SS::VDP2::RDEINT_NONE; }
 
-        MDFN_IEN_SS::VDP2::SetDeinterlaceOff(use_renderer_bob);
+        const bool use_renderer_bob = (render_mode != MDFN_IEN_SS::VDP2::RDEINT_NONE);	/* SW deinterlacer bypassed */
+        MDFN_IEN_SS::VDP2::SetRenderDeinterlace(render_mode);
 
         if(new_type != g_deint_type) {
             delete g_deint;
@@ -696,7 +699,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     /* Re-apply options now that the renderer is up. The first call (above)
      * wrote MDFNI_SetSetting entries that MDFNI_LoadGame needed to read; it
      * also enqueued VDP2REND commands, but VDP2REND_Init (called during
-     * LoadGame) re-initialises its command queue and resets DeinterlaceOff,
+     * LoadGame) re-initialises its command queue and resets the render-thread deinterlace mode,
      * so any VDP2-thread options applied before LoadGame are discarded.
      * Re-applying here is idempotent for the MDFNI_SetSetting half and
      * correctly takes effect for the VDP2 half. */
@@ -1044,7 +1047,7 @@ RETRO_API void retro_run(void)
      * — clear InterlaceOn either way so the geometry/video_cb code below sees
      * a single coherent state.
      *   - SW mode (g_deint != null): Process fills the opposite-field rows.
-     *   - "Off" mode (g_deint == null): VDP2::SetDeinterlaceOff was set to
+     *   - render-thread modes (g_deint == null): VDP2::SetRenderDeinterlace was set to
      *     true; the renderer already mirrored each scanline at draw time. */
     const bool frame_interlaced = espec.InterlaceOn;
     if(espec.InterlaceOn) {
