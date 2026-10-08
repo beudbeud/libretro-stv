@@ -8,6 +8,9 @@
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
 **     -c CPU          pin the main thread to this CPU (Linux)
+**     -i FILE         write the last frame as a binary PPM image
+**     -l FILE         load a raw core state (retro_serialize output; a
+**                     RetroArch .state must be unpacked first) after loading
 **     -r N            savestate round trip after frame N: serialize, run 300
 **                     frames, unserialize, run the same 300 frames again; the
 **                     two video/audio hashes must match (exit 3 otherwise).
@@ -46,6 +49,8 @@ static int quiet;
 static uint64_t vhash = 1469598103934665603ULL, ahash = 1469598103934665603ULL;
 static uint64_t nsamples, nframes_video;
 static unsigned cur_w, cur_h;
+static const char* img_path;
+static int img_frames_left = -1;
 
 /* --- sampling profiler --- */
 #define PROF_MAX (1 << 21)
@@ -155,6 +160,22 @@ static bool env_cb(unsigned cmd, void* data)
 static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch)
 {
  if(!data) return;	/* duped frame */
+ if(img_path && img_frames_left == 0)
+ {
+  FILE* f = fopen(img_path, "wb");
+  if(f)
+  {
+   fprintf(f, "P6\n%u %u\n255\n", w, h);
+   for(unsigned y = 0; y < h; y++)
+    for(unsigned x = 0; x < w; x++)
+    {
+     const uint32_t p = ((const uint32_t*)((const uint8_t*)data + y * pitch))[x];
+     const uint8_t rgb[3] = { (uint8_t)(p >> 16), (uint8_t)(p >> 8), (uint8_t)p };
+     fwrite(rgb, 1, 3, f);
+    }
+   fclose(f);
+  }
+ }
  for(unsigned y = 0; y < h; y++)
   fnv(&vhash, (const uint8_t*)data + y * pitch, (size_t)w * 4);
  nframes_video++;
@@ -202,6 +223,7 @@ int main(int argc, char** argv)
  int frames = 600, warm = 0;
  const char* prof_path = NULL;
  int pin_cpu = -1, rt_frame = -1;
+ const char* load_path = NULL;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
  int i = 1;
@@ -215,6 +237,8 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-p") && i + 1 < argc) prof_path = argv[++i];
   else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-r") && i + 1 < argc) rt_frame = atoi(argv[++i]);
+  else if(!strcmp(argv[i], "-l") && i + 1 < argc) load_path = argv[++i];
+  else if(!strcmp(argv[i], "-i") && i + 1 < argc) img_path = argv[++i];
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
@@ -274,12 +298,24 @@ int main(int argc, char** argv)
  if(!retro_load_game(&gi)) { fprintf(stderr, "retro_load_game failed\n"); return 1; }
  struct retro_system_av_info av; retro_get_system_av_info(&av);
  cur_w = av.geometry.base_width; cur_h = av.geometry.base_height;
+ if(load_path)
+ {
+  FILE* f = fopen(load_path, "rb");
+  if(!f) { perror(load_path); return 1; }
+  fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+  void* buf = malloc(n);
+  if(fread(buf, 1, n, f) != (size_t)n) { fprintf(stderr, "%s: short read\n", load_path); return 1; }
+  fclose(f);
+  if(!retro_unserialize(buf, n)) { fprintf(stderr, "%s: retro_unserialize failed\n", load_path); return 1; }
+  free(buf);
+ }
  if(!quiet) fprintf(stderr, "loaded: %ux%u @ %.3f Hz\n", cur_w, cur_h, av.timing.fps);
 
  double t_total = 0, t_win = 0, tmax = 0, c_total = 0;
  for(int f = 0; f < frames; f++)
  {
   if(prof_path && f == warm) prof_start();
+  img_frames_left = frames - 1 - f;
   const double t0 = now_ms(), c0 = cpu_ms();
   retro_run();
   const double dt = now_ms() - t0, dc = cpu_ms() - c0;
