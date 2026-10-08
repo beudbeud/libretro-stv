@@ -1506,6 +1506,7 @@ void SS_SCSP::SetDSPJIT(bool enable, bool verify)
  DSPJIT_Enable = enable;
  DSPJIT_Verify = verify;
  DSP.MPROG_Dirty = true;
+ MPROG_Decoded_Src[0] = ~DSP.MPROG[0];	// force a decode + compile on the next sample
 #else
  (void)enable; (void)verify;
 #endif
@@ -1517,8 +1518,15 @@ INLINE void SS_SCSP::RunDSP(void)
 
  if(DSP.MPROG_Dirty)
  {
-  DecodeMPROG();
-  recompile = true;
+  // Games rewrite the program every frame, usually with the same words:
+  // only decode (and recompile) when it actually changed.
+  if(memcmp(DSP.MPROG, MPROG_Decoded_Src, sizeof(DSP.MPROG)) != 0)
+  {
+   memcpy(MPROG_Decoded_Src, DSP.MPROG, sizeof(DSP.MPROG));
+   DecodeMPROG();
+   recompile = true;
+  }
+  DSP.MPROG_Dirty = false;
  }
 
 #if MDFN_SS_SCSP_DSP_JIT

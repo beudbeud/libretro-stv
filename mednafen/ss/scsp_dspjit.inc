@@ -22,6 +22,7 @@
 // DSPS/DSPStep are private to SS_SCSP; the member functions below are friends.
 #define DOFF(m) ((unsigned)offsetof(SS_SCSP::DSPS, m))
 
+
 //
 //
 //
@@ -58,6 +59,14 @@ static void EmitMov32(SS_SCSP_DSPJIT* j, void (SS_SCSP_DSPJIT::*w)(unsigned), un
 
 void SS_SCSP_DSPJIT::EmitProgram(SS_SCSP* scsp)
 {
+ // Every DSPS field the JIT touches must fit the unsigned 12-bit immediate of
+ // its access size (byte/add: 4095, halfword: 8190, word: 16380); the encoders
+ // would silently truncate a larger offset.
+ static_assert(offsetof(SS_SCSP::DSPS, TEMP) <= 4095, "TEMP beyond ADD immediate range");
+ static_assert(offsetof(SS_SCSP::DSPS, ReadPending) <= 4095 && offsetof(SS_SCSP::DSPS, WritePending) <= 4095, "pending flags beyond LDRB/STRB range");
+ static_assert(offsetof(SS_SCSP::DSPS, MADRS) + 2 * 32 <= 8190 && offsetof(SS_SCSP::DSPS, COEF) + 2 * 64 <= 8190 && offsetof(SS_SCSP::DSPS, EFREG) + 2 * 16 <= 8190 && offsetof(SS_SCSP::DSPS, WriteValue) <= 8190 && offsetof(SS_SCSP::DSPS, FRC_REG) <= 8190 && offsetof(SS_SCSP::DSPS, ADRS_REG) <= 8190 && offsetof(SS_SCSP::DSPS, MDEC_CT) <= 8190, "halfword field beyond LDRH/STRH range");
+ static_assert(offsetof(SS_SCSP::DSPS, MEMS) + 4 * 32 <= 16380 && offsetof(SS_SCSP::DSPS, MIXS) + 4 * 16 <= 16380 && offsetof(SS_SCSP::DSPS, ReadValue) <= 16380 && offsetof(SS_SCSP::DSPS, RWAddr) <= 16380, "word field beyond LDR/STR range");
+
  typedef SS_SCSP::DSPStep DSPStep;
  const DSPStep* const steps = scsp->DSP.MPROG_Decoded;
  #define EMIT(x) W(x)

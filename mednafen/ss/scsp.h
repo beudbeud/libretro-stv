@@ -383,6 +383,9 @@ class SS_SCSP
 
   bool MPROG_Dirty;
  } DSP;
+ // Program MPROG_Decoded was built from (kept outside DSPS: the JIT addresses
+ // DSPS fields with 12-bit immediate offsets).
+ uint64 MPROG_Decoded_Src[0x80];
  //
  //
 
