@@ -55,12 +55,13 @@ endif()
 # pgo/ with the target's /tmp/pgo/*.gcda. Stale or mismatching profiles
 # only lose the optimization for the affected functions.
 set(STV_PGO_GENERATE "" CACHE PATH "Build an instrumented core writing its profile to this directory")
+option(STV_PGO_USE "Use the profile in pgo/ when present" ON)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     if(STV_PGO_GENERATE)
         add_compile_options(-fprofile-generate=${STV_PGO_GENERATE} -fprofile-update=atomic
                             -fprofile-prefix-path=${CMAKE_BINARY_DIR})
         add_link_options(-fprofile-generate=${STV_PGO_GENERATE})
-    elseif(EXISTS ${CMAKE_SOURCE_DIR}/pgo)
+    elseif(STV_PGO_USE AND EXISTS ${CMAKE_SOURCE_DIR}/pgo)
         add_compile_options(-fprofile-use=${CMAKE_SOURCE_DIR}/pgo -fprofile-partial-training
                             -fprofile-prefix-path=${CMAKE_BINARY_DIR}
                             -Wno-missing-profile -Wno-coverage-mismatch)
