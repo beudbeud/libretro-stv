@@ -48,6 +48,25 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     )
 endif()
 
+# Profile-guided optimization (aarch64 GCC only; ~6% less CPU on the Pi 5).
+# The profile in pgo/ is used automatically. To regenerate it after code
+# changes: configure with -DSTV_PGO_GENERATE=/tmp/pgo, run the core on the
+# target through a few minutes of gameplay (decathlt, vfkids), then replace
+# pgo/ with the target's /tmp/pgo/*.gcda. Stale or mismatching profiles
+# only lose the optimization for the affected functions.
+set(STV_PGO_GENERATE "" CACHE PATH "Build an instrumented core writing its profile to this directory")
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    if(STV_PGO_GENERATE)
+        add_compile_options(-fprofile-generate=${STV_PGO_GENERATE} -fprofile-update=atomic
+                            -fprofile-prefix-path=${CMAKE_BINARY_DIR})
+        add_link_options(-fprofile-generate=${STV_PGO_GENERATE})
+    elseif(EXISTS ${CMAKE_SOURCE_DIR}/pgo)
+        add_compile_options(-fprofile-use=${CMAKE_SOURCE_DIR}/pgo -fprofile-partial-training
+                            -fprofile-prefix-path=${CMAKE_BINARY_DIR}
+                            -Wno-missing-profile -Wno-coverage-mismatch)
+    endif()
+endif()
+
 if(NOT DEFINED LIBRETRO_CORE_VERSION)
     set(LIBRETRO_CORE_VERSION "${GIT_VERSION}")
 endif()
