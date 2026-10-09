@@ -16,8 +16,9 @@
 **                     two video/audio hashes must match (exit 3 otherwise).
 **                     Needs a deterministic core (mednafen_stv_sound_thread=disabled).
 **     -p FILE         sample the program counter (SIGPROF, 1 kHz, all threads)
-**                     and write "<tid> <pc>" lines plus the core's load address
-**                     to FILE; symbolize with nm on the unstripped core
+**                     and write "<tid> <pc> <frame>" lines plus the core's load
+**                     address to FILE; symbolize with nm on the unstripped core
+**     -t FILE         write each frame's wall time (ms), one per line
 **
 ** Prints one line per 300 frames (ms/frame) and a final summary:
 **   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X cpu_ms/frame=Y
@@ -56,6 +57,8 @@ static int img_frames_left = -1;
 #define PROF_MAX (1 << 21)
 static uintptr_t* prof_pc;
 static int* prof_tid;
+static int* prof_frame;
+static volatile int cur_frame;
 static volatile unsigned prof_n;
 static void prof_handler(int sig, siginfo_t* si, void* uc)
 {
@@ -71,6 +74,7 @@ static void prof_handler(int sig, siginfo_t* si, void* uc)
   prof_pc[i] = 0;
 #endif
   prof_tid[i] = (int)syscall(SYS_gettid);
+  prof_frame[i] = cur_frame;
   prof_n = i + 1;
  }
 }
@@ -78,6 +82,7 @@ static void prof_start(void)
 {
  prof_pc = malloc(PROF_MAX * sizeof(*prof_pc));
  prof_tid = malloc(PROF_MAX * sizeof(*prof_tid));
+ prof_frame = malloc(PROF_MAX * sizeof(*prof_frame));
  struct sigaction sa; memset(&sa, 0, sizeof(sa));
  sa.sa_sigaction = prof_handler; sa.sa_flags = SA_SIGINFO | SA_RESTART;
  sigaction(SIGPROF, &sa, NULL);
@@ -94,7 +99,7 @@ static void prof_dump(const char* path, void* core_handle)
  FILE* f = fopen(path, "w");
  if(!f) { perror(path); return; }
  fprintf(f, "base %lx\n", (unsigned long)di.dli_fbase);
- for(unsigned i = 0; i < prof_n; i++) fprintf(f, "%d %lx\n", prof_tid[i], (unsigned long)prof_pc[i]);
+ for(unsigned i = 0; i < prof_n; i++) fprintf(f, "%d %lx %d\n", prof_tid[i], (unsigned long)prof_pc[i], prof_frame[i]);
  fclose(f);
  fprintf(stderr, "profile: %u samples -> %s\n", prof_n, path);
 }
@@ -223,6 +228,7 @@ int main(int argc, char** argv)
  int frames = 600, warm = 0;
  const char* prof_path = NULL;
  int pin_cpu = -1, rt_frame = -1;
+ const char* times_path = NULL;
  const char* load_path = NULL;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
@@ -238,6 +244,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-r") && i + 1 < argc) rt_frame = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-l") && i + 1 < argc) load_path = argv[++i];
+  else if(!strcmp(argv[i], "-t") && i + 1 < argc) times_path = argv[++i];
   else if(!strcmp(argv[i], "-i") && i + 1 < argc) img_path = argv[++i];
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
@@ -312,14 +319,17 @@ int main(int argc, char** argv)
  if(!quiet) fprintf(stderr, "loaded: %ux%u @ %.3f Hz\n", cur_w, cur_h, av.timing.fps);
 
  double t_total = 0, t_win = 0, tmax = 0, c_total = 0;
+ FILE* times_f = times_path ? fopen(times_path, "w") : NULL;
  for(int f = 0; f < frames; f++)
  {
   if(prof_path && f == warm) prof_start();
   img_frames_left = frames - 1 - f;
+  cur_frame = f;
   const double t0 = now_ms(), c0 = cpu_ms();
   retro_run();
   const double dt = now_ms() - t0, dc = cpu_ms() - c0;
   if(f >= warm) { t_total += dt; t_win += dt; c_total += dc; if(dt > tmax) tmax = dt; }
+  if(times_f) fprintf(times_f, "%.3f\n", dt);
   if(!quiet && (f + 1) % 300 == 0) { fprintf(stderr, "frame %6d  %.2f ms/frame (window)\n", f + 1, t_win / 300.0); t_win = 0; }
  }
  int rt_fail = 0;
@@ -354,6 +364,7 @@ int main(int argc, char** argv)
  }
  const int timed = frames > warm ? frames - warm : 1;
  if(prof_path) prof_dump(prof_path, h);
+ if(times_f) fclose(times_f);
  print_thread_cpu(stderr, frames);
  printf("frames=%d video=%016llx audio=%016llx samples=%llu ms/frame=%.3f cpu_ms/frame=%.3f max=%.2f geometry=%ux%u\n",
         frames, (unsigned long long)vhash, (unsigned long long)ahash, (unsigned long long)nsamples, t_total / timed, c_total / timed, tmax, cur_w, cur_h);
