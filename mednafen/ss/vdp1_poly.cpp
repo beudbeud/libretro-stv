@@ -76,7 +76,7 @@ static int32 PolygonResumeBase(const uint16* cmd_data)
  const uint16 mode = cmd_data[0x2];
  // Abusing the SPD bit passed to the line draw function to denote non-transparency when == 1, transparent when == 0.
  const bool SPD_Opaque = (((mode >> 3) & 0x7) < 0x6) ? ((int32)(TexFetchTab[(mode >> 3) & 0x1F](0xFFFFFFFF)) >= 0) : true;
- auto* const fnptr = LineFuncTab[(bool)(FBCR & FBCR_DIE)][(TVMR & TVMR_8BPP) ? ((TVMR & TVMR_ROTATE) ? 2 : 1) : 0][((mode >> 6) & 0x1E) | SPD_Opaque /*(mode >> 6) & 0x1F*/][(mode & 0x8000) ? 8 : (mode & 0x7)];
+ auto* const fnptr = LineFuncTab[(bool)(DrawFBCR & FBCR_DIE)][(DrawTVMR & TVMR_8BPP) ? ((DrawTVMR & TVMR_ROTATE) ? 2 : 1) : 0][((mode >> 6) & 0x1E) | SPD_Opaque /*(mode >> 6) & 0x1F*/][(mode & 0x8000) ? 8 : (mode & 0x7)];
  //
  // Don't merge e0 and e1 into a single array, keeping them separate is a workaround for gcc bug #113255
  //
@@ -107,7 +107,7 @@ static int32 PolygonResumeBase(const uint16* cmd_data)
 #endif
    //printf("%d,%d %d,%d\n", LineData.p[0].x, LineData.p[0].y, LineData.p[1].x, LineData.p[1].y);
    //
-   if(!SetupDrawLine(&ret, true, false, mode) || !iter)
+   if(!(MDFN_UNLIKELY(BandActive) && BandSkipLine()) && (!SetupDrawLine(&ret, true, false, mode) || !iter))
    {
     //
     //printf("%d:%d -> %d:%d\n", lp[0].x, lp[0].y, lp[1].x, lp[1].y);
@@ -158,7 +158,7 @@ static INLINE int32 CMD_PolygonG_T(const uint16* cmd_data)
 
  if(gourauden)
  {
-  const uint16* gtb = &VRAM[cmd_data[0xE] << 2];
+  const uint16* gtb = &DVRAM[cmd_data[0xE] << 2];
 
   ret += 4;
   for(unsigned i = 0; i < 4; i++)

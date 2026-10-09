@@ -47,6 +47,8 @@
 #include "vdp1.h"
 #include "vdp2.h"
 #include "vdp1_common.h"
+#include <mednafen/MThreading.h>
+#include <atomic>
 
 enum : int { VDP1_UpdateTimingGran = 263 };
 enum : int { VDP1_IdleTimingGran = 1019 };
@@ -69,6 +71,19 @@ int32 LocalX, LocalY;
 
 uint8 TVMR;
 uint8 FBCR;
+uint8 DrawTVMR, DrawFBCR;
+static bool DrawJobActive = false;	// a draw is being rendered by the drawing thread
+
+// Keep the drawing code's copies in step, unless a threaded draw is running
+// (then WaitDrawThread() catches them up when it completes).
+static INLINE void SyncDrawRegs(void)
+{
+ if(!DrawJobActive)
+ {
+  DrawTVMR = TVMR;
+  DrawFBCR = FBCR;
+ }
+}
 static uint8 PTMR;
 static uint8 EDSR;
 
@@ -126,6 +141,9 @@ static uint32 InstantDrawSanityLimit; // ss_horrible_hacks
 
 uint16 VRAM[0x40000];
 uint16 FB[2][0x20000];
+const uint16* DVRAM = VRAM;
+bool BandActive = false;
+int32 BandRow0 = 0, BandRow1 = 0x7FFFFFFF;
 /* Command-table snapshot used by VDP1INSTANT and VDP1LATESWAP draw loops.
  *
  * VDP1INSTANT: rebuilt at each early-swap as a per-command composite:
@@ -164,8 +182,10 @@ uint16* MeshFBDrawWhichPtr;
 // arg is true. Default false = hardware-accurate stipple.
 bool MeshImproved = false;
 
+static INLINE void WaitDrawThread(void);
 void SetMeshImproved(bool improved)
 {
+ WaitDrawThread();
  MeshImproved = improved;
 }
 //
@@ -290,13 +310,17 @@ void Init(void)
  VRAMUsageInit();
 }
 
+static void StopDrawThread(void);
 void Kill(void)
 {
+ StopDrawThread();
 
 }
 
 void Reset(bool powering_up)
 {
+ WaitDrawThread();
+
  if(powering_up)
  {
   for(unsigned i = 0; i < 0x40000; i++)
@@ -375,6 +399,7 @@ void Reset(bool powering_up)
  FBCR = 0;
  PTMR = 0;
  EDSR = 0;
+ SyncDrawRegs();
  // End confirmed.
  //
 
@@ -423,7 +448,7 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
  switch(ColorMode)
  {
   case 0:	// 16 colors, color bank
-	rtd = (VRAM[(base + (x >> 2)) & 0x3FFFF] >> (((x & 0x3) ^ 0x3) << 2)) & 0xF;
+	rtd = (DVRAM[(base + (x >> 2)) & 0x3FFFF] >> (((x & 0x3) ^ 0x3) << 2)) & 0xF;
 	VRAMUsageDrawRead((base + (x >> 2)) & 0x3FFFF);
 
 	if(!ECD && rtd == 0xF)
@@ -438,7 +463,7 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
 	return rtd | ret_or;
 
   case 1:	// 16 colors, LUT
-	rtd = (VRAM[(base + (x >> 2)) & 0x3FFFF] >> (((x & 0x3) ^ 0x3) << 2)) & 0xF;
+	rtd = (DVRAM[(base + (x >> 2)) & 0x3FFFF] >> (((x & 0x3) ^ 0x3) << 2)) & 0xF;
 	VRAMUsageDrawRead((base + (x >> 2)) & 0x3FFFF);
 
 	if(!ECD && rtd == 0xF)
@@ -452,7 +477,7 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
 	return LineData.CLUT[rtd] | ret_or;
 
   case 2:	// 64 colors, color bank
-	rtd = (VRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
+	rtd = (DVRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
 	VRAMUsageDrawRead((base + (x >> 1)) & 0x3FFFF);
 
 	if(!ECD && rtd == 0xFF)
@@ -468,7 +493,7 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
 	return (rtd & 0x3F) | ret_or;
 
   case 3:	// 128 colors, color bank
-	rtd = (VRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
+	rtd = (DVRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
 	VRAMUsageDrawRead((base + (x >> 1)) & 0x3FFFF);
 
 	if(!ECD && rtd == 0xFF)
@@ -484,7 +509,7 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
 	return (rtd & 0x7F) | ret_or;
 
   case 4:	// 256 colors, color bank
-	rtd = (VRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
+	rtd = (DVRAM[(base + (x >> 1)) & 0x3FFFF] >> (((x & 0x1) ^ 0x1) << 3)) & 0xFF;
 	VRAMUsageDrawRead((base + (x >> 1)) & 0x3FFFF);
 
 	if(!ECD && rtd == 0xFF)
@@ -503,9 +528,9 @@ static uint32 MDFN_FASTCALL TexFetch(uint32 x)
   case 6:
   case 7:
 	if(ColorMode >= 6)
-	 rtd = VRAM[0];
+	 rtd = DVRAM[0];
 	else
-	 rtd = VRAM[(base + x) & 0x3FFFF];
+	 rtd = DVRAM[(base + x) & 0x3FFFF];
 	VRAMUsageDrawRead((ColorMode >= 6) ? 0 : ((base + x) & 0x3FFFF));
 
 	if(!ECD && (rtd & 0xC000) == 0x4000)
@@ -624,7 +649,7 @@ bool SetupDrawLine(int32* const cycle_counter, const bool AA, const bool Texture
   if(MDFN_UNLIKELY(max_adx_ady < abs(p1.t - p0.t) && HSS))
   {
    LineData.ec_count = 0x7FFFFFFF;
-   lid.t.Setup(max_adx_ady + 1, p0.t >> 1, p1.t >> 1, 2, (bool)(FBCR & FBCR_EOS));
+   lid.t.Setup(max_adx_ady + 1, p0.t >> 1, p1.t >> 1, 2, (bool)(DrawFBCR & FBCR_EOS));
   }
   else
    lid.t.Setup(max_adx_ady + 1, p0.t, p1.t);
@@ -762,6 +787,193 @@ void EdgeStepper::Setup(const bool gourauden, const line_vertex& p0, const line_
    g.Setup(max_adxdy + 1, p0.g, p1.g);
 }
 
+static int32 (*const command_table[0xC])(const uint16* cmd_data) =
+{
+ /* 0x0 */         /* 0x1 */           /* 0x2 */            /* 0x3 */
+ CMD_NormalSprite, CMD_ScaledSprite,   CMD_DistortedSprite, CMD_DistortedSprite,
+
+ /* 0x4 */         /* 0x5 (polyline) *//* 0x6 */            /* 0x7 (polyline) */
+ CMD_Polygon,      CMD_Line,	    CMD_Line,            CMD_Line,
+
+ /* 0x8*/          /* 0x9 */           /* 0xA */            /* 0xB */
+ CMD_SetUserClip,  CMD_SetSystemClip,  CMD_SetLocalCoord,   CMD_SetUserClip
+};
+
+static int32 (*const resume_table[0x8])(const uint16* cmd_data) =
+{
+ /* 0x0 */         /* 0x1 */         /* 0x2 */            /* 0x3 */
+ RESUME_Sprite, RESUME_Sprite, RESUME_Sprite, RESUME_Sprite,
+
+ /* 0x4 */    /* 0x5 */     /* 0x6 */ /* 0x7 */
+ RESUME_Polygon, RESUME_Line, RESUME_Line, RESUME_Line,
+};
+
+//
+// Threaded instant drawing (ss.vdp1.threaded, VDP1INSTANT games only).
+//
+// With VDP1INSTANT the whole command list is drawn in one go, so the result
+// only depends on VRAM and the drawing registers at that moment. The main
+// thread freezes a copy of VRAM (DrawVRAM, with the frozen command table on
+// top, exactly what DoDrawing would read), walks the list without drawing to
+// get the end-of-draw state the game can observe (EDSR, the VDP1 interrupt,
+// COPR), and hands the drawing to a thread. That thread renders the list once
+// per horizontal band of framebuffer rows, top band first, so GetLine(line)
+// only waits for the band holding its row and the main thread can emulate
+// the frame's first lines while the rest is drawn. Pixels come out identical
+// to the inline path. Anything else that touches the draw framebuffer or the
+// drawing registers waits for the whole draw (WaitDrawThread()).
+//
+static bool DrawThreadWanted = false;
+static MThreading::Thread* DrawThread = nullptr;
+static MThreading::Sem* DrawThreadSem = nullptr;
+static std::atomic<bool> DrawThreadQuit(false);
+static uint16 DrawVRAM[0x40000];
+static uint32 DrawStartAddr;
+static int32 DrawStartRetAddr;
+static const int32 DrawBands[] = { 0, 32, 96, 160, 256 };
+enum : int { DrawNumBands = 4 };
+static std::atomic<int> DrawBandsDone(DrawNumBands);
+
+static void DrawListPass(void)
+{
+ uint32 addr = DrawStartAddr;
+ int32 retaddr = DrawStartRetAddr;
+ uint32 lastjump = ~0U;
+ uint32 jumploops = 0;
+ uint16 cd[0x10];
+
+ for(unsigned guard = 0; guard < 0x10000; guard++)
+ {
+  memcpy(cd, &DrawVRAM[addr], sizeof(cd));
+
+  if(!(cd[0] & 0xC000))
+  {
+   if((cd[0] & 0xF) >= 0xC)
+    return;
+
+   command_table[cd[0] & 0xF](cd);
+   if(!(cd[0] & 0x8))
+    while(resume_table[cd[0] & 0x7](cd)) { }
+  }
+  else if(cd[0] & 0x8000)
+   return;
+
+  addr = (addr + 0x10) & 0x3FFFF;
+  switch((cd[0] >> 12) & 0x3)
+  {
+   case 0: break;
+   case 1:
+	{
+	 const uint32 next = (cd[1] << 2) &~ 0xF;
+	 if(next == lastjump)
+	 {
+	  if(++jumploops >= 32)
+	   return;
+	 }
+	 else
+	 {
+	  jumploops = 0;
+	  lastjump = next;
+	 }
+	 addr = next;
+	}
+	break;
+   case 2:
+	if(retaddr < 0)
+	 retaddr = addr;
+	addr = (cd[1] << 2) &~ 0xF;
+	break;
+   case 3:
+	if(retaddr >= 0)
+	{
+	 addr = retaddr;
+	 retaddr = -1;
+	}
+	break;
+  }
+ }
+}
+
+static int DrawThreadEntry(void*)
+{
+ for(;;)
+ {
+  MThreading::Sem_Wait(DrawThreadSem);
+  if(DrawThreadQuit.load(std::memory_order_acquire))
+   return 0;
+
+  struct { int32 scx, scy, ucx0, ucy0, ucx1, ucy1, lx, ly; } regs = { SysClipX, SysClipY, UserClipX0, UserClipY0, UserClipX1, UserClipY1, LocalX, LocalY };
+
+  for(int b = 0; b < DrawNumBands; b++)
+  {
+   SysClipX = regs.scx; SysClipY = regs.scy;
+   UserClipX0 = regs.ucx0; UserClipY0 = regs.ucy0; UserClipX1 = regs.ucx1; UserClipY1 = regs.ucy1;
+   LocalX = regs.lx; LocalY = regs.ly;
+   BandRow0 = DrawBands[b];
+   BandRow1 = DrawBands[b + 1];
+   BandActive = true;
+   DrawListPass();
+   BandActive = false;
+   DrawBandsDone.store(b + 1, std::memory_order_release);
+  }
+ }
+}
+
+static void WaitDrawThreadBands(int n)
+{
+ if(!DrawJobActive)
+  return;
+
+ while(DrawBandsDone.load(std::memory_order_acquire) < n)
+ {
+  /* The thread is at most a couple of ms behind; spin. */
+ }
+
+ if(n >= DrawNumBands)
+ {
+  DrawJobActive = false;
+  DVRAM = VRAM;
+  SyncDrawRegs();
+ }
+}
+
+static INLINE void WaitDrawThread(void)
+{
+ WaitDrawThreadBands(DrawNumBands);
+}
+
+static INLINE void WaitDrawThreadRow(unsigned row)
+{
+ if(MDFN_LIKELY(!DrawJobActive))
+  return;
+
+ int b = 0;
+ while(b < DrawNumBands - 1 && (int32)row >= DrawBands[b + 1])
+  b++;
+ WaitDrawThreadBands(b + 1);
+}
+
+void SetThreaded(bool enable)
+{
+ DrawThreadWanted = enable;
+}
+
+static void StopDrawThread(void)
+{
+ if(!DrawThread)
+  return;
+ WaitDrawThread();
+ DrawThreadQuit.store(true, std::memory_order_release);
+ MThreading::Sem_Post(DrawThreadSem);
+ MThreading::Thread_Wait(DrawThread, nullptr);
+ MThreading::Sem_Destroy(DrawThreadSem);
+ DrawThread = nullptr;
+ DrawThreadSem = nullptr;
+ DrawThreadQuit.store(false);
+}
+
+static void ThreadedInstantDraw(void);
+
 enum : int { CommandPhaseBias = __COUNTER__ + 1 };
 #define VDP1_EAT_CLOCKS(n)									\
 		{										\
@@ -777,6 +989,12 @@ enum : int { CommandPhaseBias = __COUNTER__ + 1 };
 
 static INLINE void DoDrawing(void)
 {
+ if(MDFN_UNLIKELY(DrawThreadWanted) && (ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) && CommandPhase == 0)
+ {
+  ThreadedInstantDraw();
+  return;
+ }
+
 #if 1
  if(MDFN_UNLIKELY(ss_horrible_hacks & (HORRIBLEHACK_VDP1INSTANT | HORRIBLEHACK_VDP1LATESWAP)))
   CycleCounter = InstantDrawSanityLimit;
@@ -817,27 +1035,6 @@ static INLINE void DoDrawing(void)
     }
     else
     {
-     static int32 (*const command_table[0xC])(const uint16* cmd_data) =
-     {
-      /* 0x0 */         /* 0x1 */           /* 0x2 */            /* 0x3 */
-      CMD_NormalSprite, CMD_ScaledSprite,   CMD_DistortedSprite, CMD_DistortedSprite,
-
-      /* 0x4 */         /* 0x5 (polyline) *//* 0x6 */            /* 0x7 (polyline) */
-      CMD_Polygon,      CMD_Line,	    CMD_Line,            CMD_Line,
-
-      /* 0x8*/          /* 0x9 */           /* 0xA */            /* 0xB */
-      CMD_SetUserClip,  CMD_SetSystemClip,  CMD_SetLocalCoord,   CMD_SetUserClip
-     };
-
-     static int32 (*const resume_table[0x8])(const uint16* cmd_data) =
-     {
-      /* 0x0 */         /* 0x1 */         /* 0x2 */            /* 0x3 */
-      RESUME_Sprite, RESUME_Sprite, RESUME_Sprite, RESUME_Sprite,
-
-      /* 0x4 */    /* 0x5 */     /* 0x6 */ /* 0x7 */
-      RESUME_Polygon, RESUME_Line, RESUME_Line, RESUME_Line,
-     };
-
      VDP1_EAT_CLOCKS(command_table[CommandData[0] & 0xF](CommandData));
      if(!(CommandData[0] & 0x8))
      {
@@ -929,6 +1126,94 @@ static INLINE void DoDrawing(void)
 #endif
 }
 
+// Main-thread side of a threaded instant draw: same observable outcome as
+// DoDrawing() running the whole list (end flag, interrupt, COPR), with the
+// pixels left to the drawing thread.
+static void ThreadedInstantDraw(void)
+{
+ WaitDrawThread();
+
+ if(!DrawThread)
+ {
+  DrawThreadSem = MThreading::Sem_Create();
+  DrawThread = MThreading::Thread_Create(DrawThreadEntry, nullptr, "MDFN SS VDP1");
+ }
+
+ memcpy(DrawVRAM, VRAM, sizeof(DrawVRAM));
+ memcpy(DrawVRAM, VRAMCmdSnapshot, sizeof(VRAMCmdSnapshot));	// what DoDrawing reads for the command table
+
+ DrawStartAddr = CurCommandAddr;
+ DrawStartRetAddr = RetCommandAddr;
+
+ // Walk the list (no drawing) exactly like DoDrawing.
+ for(unsigned guard = 0; guard < 0x10000; guard++)
+ {
+  memcpy(CommandData, &DrawVRAM[CurCommandAddr], sizeof(CommandData));
+
+  if(MDFN_LIKELY(!(CommandData[0] & 0xC000)))
+  {
+   if(MDFN_UNLIKELY((CommandData[0] & 0xF) >= 0xC))
+   {
+    DrawingActive = false;
+    break;
+   }
+  }
+  else if(MDFN_UNLIKELY(CommandData[0] & 0x8000))
+  {
+   DrawingActive = false;
+   EDSR |= 0x2;
+   SCU_SetInt(SCU_INT_VDP1, true);
+   SCU_SetInt(SCU_INT_VDP1, false);
+   break;
+  }
+
+  CurCommandAddr = (CurCommandAddr + 0x10) & 0x3FFFF;
+  switch((CommandData[0] >> 12) & 0x3)
+  {
+   case 0: break;
+   case 1:
+	{
+	 const uint32 nextAddr = (CommandData[1] << 2) &~ 0xF;
+	 if(nextAddr == LastJumpAddr)
+	 {
+	  if(++JumpLoopCount >= 32)
+	  {
+	   DrawingActive = false;
+	   goto WalkDone;
+	  }
+	 }
+	 else
+	 {
+	  JumpLoopCount = 0;
+	  LastJumpAddr = nextAddr;
+	 }
+	 CurCommandAddr = nextAddr;
+	}
+	break;
+   case 2:
+	if(RetCommandAddr < 0)
+	 RetCommandAddr = CurCommandAddr;
+	CurCommandAddr = (CommandData[1] << 2) &~ 0xF;
+	break;
+   case 3:
+	if(RetCommandAddr >= 0)
+	{
+	 CurCommandAddr = RetCommandAddr;
+	 RetCommandAddr = -1;
+	}
+	break;
+  }
+ }
+ DrawingActive = false;	// a list that never ends is cut short, like the sanity limit would
+ WalkDone:;
+ InstantDrawSanityLimit = CycleCounter;
+
+ DVRAM = DrawVRAM;
+ DrawJobActive = true;
+ DrawBandsDone.store(0, std::memory_order_release);
+ MThreading::Sem_Post(DrawThreadSem);
+}
+
 sscpu_timestamp_t Update(sscpu_timestamp_t timestamp)
 {
  if(MDFN_UNLIKELY(timestamp < lastts))
@@ -996,6 +1281,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
 
  if(MDFN_UNLIKELY(vbcdpending & hb_status & (old_hb_status ^ hb_status)))
  {
+  WaitDrawThread();	// erase / swap below touch the draw framebuffer
   vbcdpending = false;
 
   if(vb_status) // Going into v-blank
@@ -1192,6 +1478,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
  if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT) &&
                    vbcdpending && hb_status && old_vb_status && !vb_status))
  {
+  WaitDrawThread();
   vbcdpending = false;
   InstantDrawSanityLimit = 10000000;
   FBVBEraseActive = false;  // fill_n replaces the FBVBErase path for VDP1INSTANT
@@ -1280,6 +1567,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
   * producing ~7-9px positional shear between adjacent sprite commands. */
  if(MDFN_UNLIKELY((ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && LateSwapPending && hb_status))
  {
+  WaitDrawThread();
   LateSwapPending = false;
   LateSwapActive = true;
   InstantDrawSanityLimit = 10000000;
@@ -1386,6 +1674,14 @@ bool GetLine(const int line, uint16* buf, uint16* mesh_buf, unsigned w, uint32 r
                          : (ss_horrible_hacks & HORRIBLEHACK_VDP1INSTANT)
                            ? (unsigned)FBDrawWhich
                            : (unsigned)!FBDrawWhich;
+
+ if(MDFN_UNLIKELY(DrawJobActive))
+ {
+  if(TVMR & TVMR_ROTATE)
+   WaitDrawThread();
+  else
+   WaitDrawThreadRow(line & 0xFF);
+ }
 
  if(TVMR & TVMR_ROTATE)
  {
@@ -1542,6 +1838,7 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 
  SS_DBGTI(SS_DBG_VDP1_REGW, "[VDP1] Register write: 0x%02x: 0x%04x", which << 1, value);
 
+
  switch(which)
  {
   default:
@@ -1550,12 +1847,14 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 
   case 0x0:	// TVMR
 	TVMR = value & 0xF;
+	SyncDrawRegs();
 	EraseParams.rot8 = (TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE);
 	EraseParams.fb_x_mask = EraseParams.rot8 ? 0xFF : 0x1FF;
 	break;
 
   case 0x1:	// FBCR
 	FBCR = value & 0x1F;
+	SyncDrawRegs();
 	FBManualPending |= value & 0x2;
 	break;
 
@@ -1563,6 +1862,7 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	PTMR = (value & 0x3);
 	if(value & 0x1)
 	{
+	 WaitDrawThread();	// erases the draw buffer and restarts drawing
 	 /* Per spec: PTMR=01B starts drawing immediately, unconditionally.
 	  * With VDP1INSTANT, each manual restart must get a fresh budget so that
 	  * mid-frame command-list updates (typical in fighters after CPU prepares
@@ -1586,6 +1886,7 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	 * active display — LateSwapNeedsDraw stays true until we actually draw. */
 	if(MDFN_UNLIKELY((value & 0x2) && (ss_horrible_hacks & HORRIBLEHACK_VDP1LATESWAP) && LateSwapNeedsDraw))
 	{
+	 WaitDrawThread();
 	 LateSwapNeedsDraw = false;
 	 InstantDrawSanityLimit = 10000000;
 	 StartDrawing();
@@ -1708,6 +2009,7 @@ MDFN_FASTCALL void Write8_DB(uint32 A, uint16 DB)
  {
   uint32 FBA = A;
 
+  WaitDrawThread();
   SS_DBGTI(SS_DBG_VDP1_FBW, "[VDP1] Write to FB: 0x%02x->FB[%d][0x%05x] CycleCounter=%d", (DB >> (((A & 1) ^ 1) << 3)) & 0xFF, FBDrawWhich, A & 0x3FFFF, CycleCounter);
 
   if((TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE))
@@ -1744,6 +2046,7 @@ MDFN_FASTCALL void Write16_DB(uint32 A, uint16 DB)
  {
   uint32 FBA = A;
 
+  WaitDrawThread();
   SS_DBGTI(SS_DBG_VDP1_FBW, "[VDP1] Write to FB: 0x%04x->FB[%d][0x%05x] CycleCounter=%d", DB, FBDrawWhich, A & 0x3FFFF, CycleCounter);
 
   if((TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE))
@@ -1767,6 +2070,7 @@ MDFN_FASTCALL uint16 Read16_DB(uint32 A)
  {
   uint32 FBA = A;
 
+  WaitDrawThread();
   if((TVMR & (TVMR_8BPP | TVMR_ROTATE)) == (TVMR_8BPP | TVMR_ROTATE))
    FBA = (FBA & 0x1FF) | ((FBA << 1) & 0x3FC00) | ((FBA >> 8) & 0x200);
 
@@ -1778,6 +2082,7 @@ MDFN_FASTCALL uint16 Read16_DB(uint32 A)
 
 void StateAction(StateMem* sm, const unsigned load, const bool data_only)
 {
+ WaitDrawThread();
  bool tmp_abs_dy_gt_abs_dx = false;
 
  SFORMAT Prim_StateRegs[] =
@@ -1974,6 +2279,7 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   //
   FBDrawWhichPtr = FB[FBDrawWhich];
   MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
+  SyncDrawRegs();
 
   if(load < 0x00102500)
   {
@@ -2059,6 +2365,7 @@ uint32 GetRegister(const unsigned id, char* const special, const uint32 special_
 
 void SetRegister(const unsigned id, const uint32 value)
 {
+ WaitDrawThread();
  // TODO
  switch(id)
  {

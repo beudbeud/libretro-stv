@@ -37,6 +37,9 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_C
 void Reset(bool powering_up) MDFN_COLD;
 
 sscpu_timestamp_t Update(sscpu_timestamp_t timestamp);
+// Render VDP1INSTANT draws on a separate thread (ss.vdp1.threaded). Takes
+// effect at the next draw; no-op for other games.
+void SetThreaded(bool enable) MDFN_COLD;
 void AdjustTS(const int32 delta);
 
 MDFN_FASTCALL void Write_CheckDrawSlowdown(uint32 A, sscpu_timestamp_t time_thing) MDFN_HOT;

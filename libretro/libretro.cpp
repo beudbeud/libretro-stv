@@ -495,6 +495,7 @@ static void apply_options()
     BOOL_OPT("mednafen_stv_autortc",      "ss.smpc.autortc");
     STR_OPT ("mednafen_stv_cpu_cache",    "ss.cpu_cache_stv");
     BOOL_OPT("mednafen_stv_sound_thread", "ss.sound.threaded");
+    BOOL_OPT("mednafen_stv_vdp1_thread",  "ss.vdp1.threaded");
 #undef BOOL_OPT
 #undef STR_OPT
 

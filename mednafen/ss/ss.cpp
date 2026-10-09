@@ -1423,6 +1423,12 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
  int sls = MDFN_GetSettingI(PAL ? "ss.slstartp" : "ss.slstart");
  int sle = MDFN_GetSettingI(PAL ? "ss.slendp" : "ss.slend");
  const uint64 vdp2_affinity = MDFN_GetSettingUI("ss.affinity.vdp2");
+ {
+  bool vdp1_threaded = MDFN_GetSettingB("ss.vdp1.threaded");
+  if(const char* e = getenv("MDFN_SS_VDP1_THREAD"))
+   vdp1_threaded = atoi(e) != 0;
+  VDP1::SetThreaded(vdp1_threaded);
+ }
 
  if(PAL)
  {
@@ -2514,6 +2520,7 @@ static const MDFNSetting SSSettings[] =
 	gettext_noop("0 is lowest quality and CPU usage, 10 is highest quality and CPU usage.  The resampler that this setting refers to is used for converting from 44.1KHz to the sampling rate of the host audio device Mednafen is using.  Changing Mednafen's output rate, via the \"\5sound.rate\" setting, to \"44100\" may bypass the resampler, which can decrease CPU usage by Mednafen, and can increase or decrease audio quality, depending on various operating system and hardware factors."), MDFNST_UINT, "4", "0", "10" },
 
  { "ss.region_autodetect", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Attempt to auto-detect region of game."), NULL, MDFNST_BOOL, "1" },
+ { "ss.vdp1.threaded", MDFNSF_NOFLAGS, gettext_noop("Render VDP1 instant draws on a separate thread."), gettext_noop("Only affects games using the VDP1INSTANT hack (Astra SuperStars, Decathlete, Virtua Fighter Kids). Same pixels as the inline path."), MDFNST_BOOL, "0" },
  { "ss.sound.threaded", MDFNSF_NOFLAGS, gettext_noop("Run the 68K and SCSP on a separate thread."), gettext_noop("Same command ordering as the inline path; the 68K may observe an SH-2 sound RAM write a few microseconds early."), MDFNST_BOOL, "1" },
  { "ss.scsp.dsp_jit", MDFNSF_NOFLAGS, gettext_noop("Compile the SCSP DSP program to native code."), gettext_noop("AArch64 only; the interpreter is used elsewhere. Bit-exact, no effect on emulation state."), MDFNST_BOOL, "1" },
  { "ss.region_default", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Default region to use."), gettext_noop("Used if region autodetection fails or is disabled."), MDFNST_ENUM, "jp", NULL, NULL, NULL, NULL, Region_List },

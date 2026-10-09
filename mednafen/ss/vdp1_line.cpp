@@ -75,7 +75,7 @@ int32 RESUME_Line(const uint16* cmd_data)
  const uint16 mode = cmd_data[0x2];
  // Abusing the SPD bit passed to the line draw function to denote non-transparency when == 1, transparent when == 0.
  const bool SPD_Opaque = (((mode >> 3) & 0x7) < 0x6) ? ((int32)(TexFetchTab[(mode >> 3) & 0x1F](0xFFFFFFFF)) >= 0) : true;
- auto* const fnptr = LineFuncTab[(bool)(FBCR & FBCR_DIE)][(TVMR & TVMR_8BPP) ? ((TVMR & TVMR_ROTATE) ? 2 : 1) : 0][((mode >> 6) & 0x1E) | SPD_Opaque /*(mode >> 6) & 0x1F*/][(mode & 0x8000) ? 8 : (mode & 0x7)];
+ auto* const fnptr = LineFuncTab[(bool)(DrawFBCR & FBCR_DIE)][(DrawTVMR & TVMR_8BPP) ? ((DrawTVMR & TVMR_ROTATE) ? 2 : 1) : 0][((mode >> 6) & 0x1E) | SPD_Opaque /*(mode >> 6) & 0x1F*/][(mode & 0x8000) ? 8 : (mode & 0x7)];
  const uint32 num_lines = (cmd_data[0] & 0x1) ? 4 : 1;
  uint32 iter = PrimData.iter;
  int32 ret = 0;
@@ -97,7 +97,7 @@ int32 RESUME_Line(const uint16* cmd_data)
 
    if(mode & 0x4) // Gouraud
    {
-    const uint16* gtb = &VRAM[cmd_data[0xE] << 2];
+    const uint16* gtb = &DVRAM[cmd_data[0xE] << 2];
 
     ret += 2;
     LineData.p[0].g = gtb[(iter + 0) & 0x3];

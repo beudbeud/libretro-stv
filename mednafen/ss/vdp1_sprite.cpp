@@ -83,7 +83,7 @@ template<bool gourauden>
 static int32 SpriteResumeBase(const uint16* cmd_data)
 {
  const uint16 mode = cmd_data[0x2];
- auto* fnptr = LineFuncTab[(bool)(FBCR & FBCR_DIE)][(TVMR & TVMR_8BPP) ? ((TVMR & TVMR_ROTATE) ? 2 : 1) : 0][(mode >> 6) & 0x1F][(mode & 0x8000) ? 8 : (mode & 0x7)];
+ auto* fnptr = LineFuncTab[(bool)(DrawFBCR & FBCR_DIE)][(DrawTVMR & TVMR_8BPP) ? ((DrawTVMR & TVMR_ROTATE) ? 2 : 1) : 0][(mode >> 6) & 0x1F][(mode & 0x8000) ? 8 : (mode & 0x7)];
  LineData.tffn = TexFetchTab[(mode >> 3) & 0x1F];
  //
  // Don't merge e0 and e1 into a single array, keeping them separate is a workaround for gcc bug #113255
@@ -111,7 +111,7 @@ static int32 SpriteResumeBase(const uint16* cmd_data)
 
    LineData.tex_base = tex_base + big_t.PreStep();
    //
-   if(!SetupDrawLine(&ret, true, true, mode) || !iter)
+   if(!(MDFN_UNLIKELY(BandActive) && BandSkipLine()) && (!SetupDrawLine(&ret, true, true, mode) || !iter))
    {
     //
     //printf("%d:%d -> %d:%d\n", lp[0].x, lp[0].y, lp[1].x, lp[1].y);
@@ -257,7 +257,7 @@ static INLINE int32 SpriteBase(const uint16* cmd_data)
 
  if(cmd_data[0x2] & 0x4) // gouraud
  {
-  const uint16* gtb = &VRAM[cmd_data[0xE] << 2];
+  const uint16* gtb = &DVRAM[cmd_data[0xE] << 2];
 
   ret += 4;
   for(unsigned i = 0; i < 4; i++)
@@ -281,7 +281,7 @@ static INLINE int32 SpriteBase(const uint16* cmd_data)
 
   case 1:
 	  for(unsigned i = 0; i < 16; i++)
-	   LineData.CLUT[i] = VRAM[((color &~ 0x3) << 2) | i];
+	   LineData.CLUT[i] = DVRAM[((color &~ 0x3) << 2) | i];
 
 	  ret += 16;
 	  break;

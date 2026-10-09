@@ -44,6 +44,14 @@ int32 CMD_Line(const uint16*);
 int32 RESUME_Line(const uint16*);
 
 MDFN_HIDE extern uint16 VRAM[0x40000];
+// VRAM as seen by the drawing code: VRAM itself, or a copy frozen at draw
+// start while the drawing thread renders an instant (VDP1INSTANT) draw.
+MDFN_HIDE extern const uint16* DVRAM;
+
+// Drawing-thread band: when BandActive, only framebuffer rows in
+// [BandRow0, BandRow1) are written (rows as indexed by PlotPixel/GetLine).
+MDFN_HIDE extern bool BandActive;
+MDFN_HIDE extern int32 BandRow0, BandRow1;
 MDFN_HIDE extern uint16 FB[2][0x20000];
 MDFN_HIDE extern uint16* FBDrawWhichPtr;
 
@@ -78,6 +86,11 @@ enum { FBCR_DIL	   = 0x04 };	// Double interlace draw line(0=even, 1=odd) (does 
 enum { FBCR_DIE	   = 0x08 };	// Double interlace enable
 enum { FBCR_EOS	   = 0x10 };	// Even/Odd coordinate select(0=even, 1=odd, used with HSS)
 MDFN_HIDE extern uint8 FBCR;
+
+// TVMR/FBCR as read by the drawing code. Equal to TVMR/FBCR, except while
+// the drawing thread renders a draw: then they keep the values from the
+// draw's start (the main thread may write TVMR/FBCR meanwhile).
+MDFN_HIDE extern uint8 DrawTVMR, DrawFBCR;
 
 MDFN_HIDE extern uint8 spr_w_shift_tab[8];
 MDFN_HIDE extern uint8 gouraud_lut[0x40];
@@ -231,11 +244,17 @@ static INLINE int32 PlotPixel(int32 x, int32 y, uint16 pix, bool transparent, Go
  if(die)
  {
   fbyptr = &FBDrawWhichPtr[((y >> 1) & 0xFF) << 9];
-  transparent |= ((y & 1) != (bool)(FBCR & FBCR_DIL));
+  transparent |= ((y & 1) != (bool)(DrawFBCR & FBCR_DIL));
  }
  else
  {
   fbyptr = &FBDrawWhichPtr[(y & 0xFF) << 9];
+ }
+
+ if(MDFN_UNLIKELY(BandActive))
+ {
+  const int32 row = die ? ((y >> 1) & 0xFF) : (y & 0xFF);
+  transparent |= (row < BandRow0) | (row >= BandRow1);
  }
 
  if(MeshEn)
@@ -505,7 +524,7 @@ static INLINE int32 AdjustDrawTiming(const int32 cycles)
  MDFN_HIDE extern uint32 DTACounter;
  uint32 extra_cycles;
 
- DTACounter += cycles * ((TVMR & TVMR_8BPP) ? 24 : 48);
+ DTACounter += cycles * ((DrawTVMR & TVMR_8BPP) ? 24 : 48);
  extra_cycles = DTACounter >> 8;
  DTACounter &= 0xFF;
 
@@ -513,6 +532,23 @@ static INLINE int32 AdjustDrawTiming(const int32 cycles)
 }
 
 bool SetupDrawLine(int32* const cycle_counter, const bool AA, const bool Textured, const uint16 mode);
+
+// Drawing-thread band pass: true when the line in LineData.p cannot touch a
+// framebuffer row of the current band (conservative: lines whose rows could
+// wrap are never skipped). Skipping is only an optimization; PlotPixel also
+// filters by band.
+static INLINE bool BandSkipLine(void)
+{
+ int32 a = LineData.p[0].y, b = LineData.p[1].y;
+ if(a > b) std::swap(a, b);
+ a -= 1;	// anti-aliasing pixels can be one row off the line
+ b += 1;
+ const bool die = (DrawFBCR & FBCR_DIE);
+ if(a < 0 || b >= (die ? 512 : 256))
+  return false;
+ if(die) { a >>= 1; b >>= 1; }
+ return (b < BandRow0) | (a >= BandRow1);
+}
 
  /* hmm, possible problem with AA and drawn_ac...*/
  #define PBODY(pxy)											\
