@@ -696,6 +696,45 @@ void SS_RequestMLExit(void)
  next_event_ts = 0;
 }
 
+//
+// Relaxed master/slave sync (ss.sh2.relaxed_sync): the slave catches up with the master only
+// before a master instruction that may touch the bus, change flow or the interrupt mask, and
+// before events, instead of after every master instruction. Memory accesses stay ordered between
+// the two CPUs; only the latency of cross-CPU interrupts can shift by a few instructions.
+// Data-cache-only mode (EmulateICache=false) only.
+//
+static bool SH2_RelaxedSync = false;
+static bool SH2_RegOnlyOp[256];
+
+static void SH2_InitRelaxedSync(bool enable)
+{
+ SH2_RelaxedSync = enable;
+ for(unsigned op = 0; op < 256; op++)
+ {
+  switch(op)
+  {
+   // Register-only instructions: no memory access, no branch, no SR write.
+   OP_MOV_IMM_REG OP_MOV_REG_REG OP_MOVA_PCREL_REG0 OP_MOVT_REG OP_SWAP_B_REG_REG OP_SWAP_W_REG_REG
+   OP_XTRCT_REG_REG OP_ADD_REG_REG OP_ADD_IMM_REG OP_ADDC_REG_REG OP_ADDV_REG_REG
+   OP_CMP_EQ_IMM_REG0 OP_CMP_EQ_REG_REG OP_CMP_HS_REG_REG OP_CMP_GE_REG_REG OP_CMP_HI_REG_REG
+   OP_CMP_GT_REG_REG OP_CMP_PZ_REG OP_CMP_PL_REG OP_CMP_STR_REG_REG OP_DIV1_REG_REG OP_DIV0S_REG_REG
+   OP_DIV0U OP_DMULS_L_REG_REG OP_DMULU_L_REG_REG OP_DT OP_EXTS_B_REG_REG OP_EXTS_W_REG_REG
+   OP_EXTU_B_REG_REG OP_EXTU_W_REG_REG OP_MUL_L_REG_REG OP_MULS_W_REG_REG OP_MULU_W_REG_REG
+   OP_NEG_REG_REG OP_NEGC_REG_REG OP_SUB_REG_REG OP_SUBC_REG_REG OP_SUBV_REG_REG OP_AND_REG_REG
+   OP_AND_IMM_REG0 OP_NOT_REG_REG OP_OR_REG_REG OP_OR_IMM_REG0 OP_TST_REG_REG OP_TST_IMM_REG0
+   OP_XOR_REG_REG OP_XOR_IMM_REG0 OP_ROTL_REG OP_ROTR_REG OP_ROTCL_REG OP_ROTCR_REG OP_SHAR_REG
+   OP_SHLL_REG OP_SHLR_REG OP_SHLL2_REG OP_SHLR2_REG OP_SHLL8_REG OP_SHLR8_REG OP_SHLL16_REG
+   OP_SHLR16_REG OP_CLRT OP_CLRMAC OP_NOP OP_SETT OP_STS OP_STC OP_LDS
+    SH2_RegOnlyOp[op] = true;
+    break;
+
+   default:
+    SH2_RegOnlyOp[op] = false;
+    break;
+  }
+ }
+}
+
 #if defined(__GNUC__) && !defined(__clang__)
  #pragma GCC push_options
  #pragma GCC optimize("O2,no-unroll-loops,no-peel-loops,no-crossjumping")
@@ -736,7 +775,7 @@ static INLINE int32 RunLoop_INLINE(EmulateSpecStruct* espec)
      else
       CPU[1].RunSlaveUntil(CPU[0].timestamp);
     }
-    else
+    else if(DebugMode || !SH2_RelaxedSync || !SH2_RegOnlyOp[CPU[0].Pipe_ID >> 24] || CPU[0].timestamp >= next_event_ts)
     {
      while(MDFN_LIKELY(CPU[0].timestamp > CPU[1].timestamp))
      {
@@ -1428,6 +1467,12 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
   if(const char* e = getenv("MDFN_SS_VDP1_THREAD"))
    vdp1_threaded = atoi(e) != 0;
   VDP1::SetThreaded(vdp1_threaded);
+ }
+ {
+  bool relaxed_sync = MDFN_GetSettingB("ss.sh2.relaxed_sync");
+  if(const char* e = getenv("MDFN_SS_SH2SYNC"))
+   relaxed_sync = atoi(e) != 0;
+  SH2_InitRelaxedSync(relaxed_sync);
  }
 
  if(PAL)
@@ -2520,6 +2565,7 @@ static const MDFNSetting SSSettings[] =
 	gettext_noop("0 is lowest quality and CPU usage, 10 is highest quality and CPU usage.  The resampler that this setting refers to is used for converting from 44.1KHz to the sampling rate of the host audio device Mednafen is using.  Changing Mednafen's output rate, via the \"\5sound.rate\" setting, to \"44100\" may bypass the resampler, which can decrease CPU usage by Mednafen, and can increase or decrease audio quality, depending on various operating system and hardware factors."), MDFNST_UINT, "4", "0", "10" },
 
  { "ss.region_autodetect", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Attempt to auto-detect region of game."), NULL, MDFNST_BOOL, "1" },
+ { "ss.sh2.relaxed_sync", MDFNSF_NOFLAGS, gettext_noop("Synchronize the slave SH-2 with the master only around bus accesses."), gettext_noop("Faster on games that keep both CPUs busy (Decathlete). Memory accesses stay ordered; cross-CPU interrupts may be taken a few instructions later. 'data_cb' CPU cache mode only."), MDFNST_BOOL, "0" },
  { "ss.vdp1.threaded", MDFNSF_NOFLAGS, gettext_noop("Render VDP1 instant draws on a separate thread."), gettext_noop("Only affects games using the VDP1INSTANT hack (Astra SuperStars, Decathlete, Virtua Fighter Kids). Same pixels as the inline path."), MDFNST_BOOL, "0" },
  { "ss.sound.threaded", MDFNSF_NOFLAGS, gettext_noop("Run the 68K and SCSP on a separate thread."), gettext_noop("Same command ordering as the inline path; the 68K may observe an SH-2 sound RAM write a few microseconds early."), MDFNST_BOOL, "1" },
  { "ss.scsp.dsp_jit", MDFNSF_NOFLAGS, gettext_noop("Compile the SCSP DSP program to native code."), gettext_noop("AArch64 only; the interpreter is used elsewhere. Bit-exact, no effect on emulation state."), MDFNST_BOOL, "1" },
