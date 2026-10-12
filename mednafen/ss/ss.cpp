@@ -697,23 +697,34 @@ void SS_RequestMLExit(void)
 }
 
 //
-// Relaxed master/slave sync (ss.sh2.relaxed_sync): the slave catches up with the master only
-// before a master instruction that may touch the bus, change flow or the interrupt mask, and
-// before events, instead of after every master instruction. Memory accesses stay ordered between
-// the two CPUs; only the latency of cross-CPU interrupts can shift by a few instructions.
+// Relaxed master/slave sync (ss.sh2.relaxed_sync, SH7095_BusSync): instead of after every master
+// instruction, the slave catches up with the master right before each of the master's external bus
+// accesses (C_MemReadRT/C_MemWriteRT with NeedSlaveCall == 2), before events, and before master
+// instructions that write SR or take an exception. Bus accesses stay ordered between the two CPUs;
+// cache hits and on-chip register accesses of the master don't wait for the slave, so cross-CPU
+// interrupts and RAM written by the slave may be seen a little later.
 // Data-cache-only mode (EmulateICache=false) only.
 //
-static bool SH2_RelaxedSync = false;
-static bool SH2_RegOnlyOp[256];
+static bool SH2_NoSyncOp[256];
+
+static NO_INLINE void SH7095_SlaveSync(sscpu_timestamp_t bound_timestamp)
+{
+ while(MDFN_LIKELY(bound_timestamp > CPU[1].timestamp))
+  CPU[1].Step<1, false, false>();
+}
 
 static void SH2_InitRelaxedSync(bool enable)
 {
- SH2_RelaxedSync = enable;
+ SH7095_BusSync = enable;
+ CPU[0].RecalcMRWFP_0();
+ CPU[0].RecalcMRWFP_1_7();
+
  for(unsigned op = 0; op < 256; op++)
  {
   switch(op)
   {
-   // Register-only instructions: no memory access, no branch, no SR write.
+   // Register-only instructions (no memory access, no SR write), branches included: the
+   // slave can't observe the master's PC.
    OP_MOV_IMM_REG OP_MOV_REG_REG OP_MOVA_PCREL_REG0 OP_MOVT_REG OP_SWAP_B_REG_REG OP_SWAP_W_REG_REG
    OP_XTRCT_REG_REG OP_ADD_REG_REG OP_ADD_IMM_REG OP_ADDC_REG_REG OP_ADDV_REG_REG
    OP_CMP_EQ_IMM_REG0 OP_CMP_EQ_REG_REG OP_CMP_HS_REG_REG OP_CMP_GE_REG_REG OP_CMP_HI_REG_REG
@@ -725,11 +736,24 @@ static void SH2_InitRelaxedSync(bool enable)
    OP_XOR_REG_REG OP_XOR_IMM_REG0 OP_ROTL_REG OP_ROTR_REG OP_ROTCL_REG OP_ROTCR_REG OP_SHAR_REG
    OP_SHLL_REG OP_SHLR_REG OP_SHLL2_REG OP_SHLR2_REG OP_SHLL8_REG OP_SHLR8_REG OP_SHLL16_REG
    OP_SHLR16_REG OP_CLRT OP_CLRMAC OP_NOP OP_SETT OP_STS OP_STC OP_LDS
-    SH2_RegOnlyOp[op] = true;
+   OP_BF OP_BF_S OP_BT OP_BT_S OP_BRA OP_BRAF_REG OP_BSR OP_BSRF_REG OP_JMP_REGINDIR OP_JSR_REGINDIR OP_RTS
+
+   // Memory accesses: synced in the master's bus access handlers.
+   OP_MOV_W_PCREL_REG OP_MOV_L_PCREL_REG OP_MOV_B_REG_REGINDIR OP_MOV_W_REG_REGINDIR OP_MOV_L_REG_REGINDIR
+   OP_MOV_B_REGINDIR_REG OP_MOV_W_REGINDIR_REG OP_MOV_L_REGINDIR_REG OP_MOV_B_REG_REGINDIRPD OP_MOV_W_REG_REGINDIRPD
+   OP_MOV_L_REG_REGINDIRPD OP_MOV_B_REGINDIRPI_REG OP_MOV_W_REGINDIRPI_REG OP_MOV_L_REGINDIRPI_REG
+   OP_MOV_B_REG0_REGINDIRDISP OP_MOV_W_REG0_REGINDIRDISP OP_MOV_L_REG_REGINDIRDISP OP_MOV_B_REGINDIRDISP_REG0
+   OP_MOV_W_REGINDIRDISP_REG0 OP_MOV_L_REGINDIRDISP_REG OP_MOV_B_REG_IDXREGINDIR OP_MOV_W_REG_IDXREGINDIR
+   OP_MOV_L_REG_IDXREGINDIR OP_MOV_B_IDXREGINDIR_REG OP_MOV_W_IDXREGINDIR_REG OP_MOV_L_IDXREGINDIR_REG
+   OP_MOV_B_REG0_GBRINDIRDISP OP_MOV_W_REG0_GBRINDIRDISP OP_MOV_L_REG0_GBRINDIRDISP OP_MOV_B_GBRINDIRDISP_REG0
+   OP_MOV_W_GBRINDIRDISP_REG0 OP_MOV_L_GBRINDIRDISP_REG0 OP_MAC_L OP_MAC_W OP_AND_B_IMM_IDXGBRINDIR
+   OP_OR_B_IMM_IDXGBRINDIR OP_TAS_B_REGINDIR OP_TST_B_IMM_IDXGBRINDIR OP_XOR_B_IMM_IDXGBRINDIR
+   OP_LDS_L OP_STC_L OP_STS_L
+    SH2_NoSyncOp[op] = true;
     break;
 
    default:
-    SH2_RegOnlyOp[op] = false;
+    SH2_NoSyncOp[op] = false;
     break;
   }
  }
@@ -775,7 +799,7 @@ static INLINE int32 RunLoop_INLINE(EmulateSpecStruct* espec)
      else
       CPU[1].RunSlaveUntil(CPU[0].timestamp);
     }
-    else if(DebugMode || !SH2_RelaxedSync || !SH2_RegOnlyOp[CPU[0].Pipe_ID >> 24] || CPU[0].timestamp >= next_event_ts)
+    else if(DebugMode || !SH7095_BusSync || !SH2_NoSyncOp[CPU[0].Pipe_ID >> 24] || CPU[0].timestamp >= next_event_ts)
     {
      while(MDFN_LIKELY(CPU[0].timestamp > CPU[1].timestamp))
      {
@@ -2565,7 +2589,7 @@ static const MDFNSetting SSSettings[] =
 	gettext_noop("0 is lowest quality and CPU usage, 10 is highest quality and CPU usage.  The resampler that this setting refers to is used for converting from 44.1KHz to the sampling rate of the host audio device Mednafen is using.  Changing Mednafen's output rate, via the \"\5sound.rate\" setting, to \"44100\" may bypass the resampler, which can decrease CPU usage by Mednafen, and can increase or decrease audio quality, depending on various operating system and hardware factors."), MDFNST_UINT, "4", "0", "10" },
 
  { "ss.region_autodetect", MDFNSF_EMU_STATE | MDFNSF_UNTRUSTED_SAFE, gettext_noop("Attempt to auto-detect region of game."), NULL, MDFNST_BOOL, "1" },
- { "ss.sh2.relaxed_sync", MDFNSF_NOFLAGS, gettext_noop("Synchronize the slave SH-2 with the master only around bus accesses."), gettext_noop("Faster on games that keep both CPUs busy (Decathlete). Memory accesses stay ordered; cross-CPU interrupts may be taken a few instructions later. 'data_cb' CPU cache mode only."), MDFNST_BOOL, "0" },
+ { "ss.sh2.relaxed_sync", MDFNSF_NOFLAGS, gettext_noop("Synchronize the slave SH-2 with the master only around bus accesses."), gettext_noop("Faster on games that keep both CPUs busy (Decathlete). Bus accesses stay ordered; cross-CPU interrupts and data written by the slave may be seen slightly later. 'data_cb' CPU cache mode only."), MDFNST_BOOL, "0" },
  { "ss.vdp1.threaded", MDFNSF_NOFLAGS, gettext_noop("Render VDP1 instant draws on a separate thread."), gettext_noop("Only affects games using the VDP1INSTANT hack (Astra SuperStars, Decathlete, Virtua Fighter Kids). Same pixels as the inline path."), MDFNST_BOOL, "0" },
  { "ss.sound.threaded", MDFNSF_NOFLAGS, gettext_noop("Run the 68K and SCSP on a separate thread."), gettext_noop("Same command ordering as the inline path; the 68K may observe an SH-2 sound RAM write a few microseconds early."), MDFNST_BOOL, "1" },
  { "ss.scsp.dsp_jit", MDFNSF_NOFLAGS, gettext_noop("Compile the SCSP DSP program to native code."), gettext_noop("AArch64 only; the interpreter is used elsewhere. Bit-exact, no effect on emulation state."), MDFNST_BOOL, "1" },

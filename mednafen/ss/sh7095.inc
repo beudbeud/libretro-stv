@@ -107,6 +107,11 @@ SH7095::SH7095(const char* const name_arg, const unsigned event_id_dma_arg, uint
  Init(false, false);
 }
 
+// Data-cache-only mode with bus-access sync: the master catches the slave up right before each of
+// its external bus accesses (NeedSlaveCall == 2). Defined in ss.cpp.
+static bool SH7095_BusSync = false;
+static void SH7095_SlaveSync(sscpu_timestamp_t bound_timestamp);
+
 template<unsigned which, int NeedSlaveCall, bool CacheBypassHack, typename T, unsigned region, bool CacheEnabled, int32 IsInstr>
 static NO_INLINE MDFN_FASTCALL T C_MemReadRT(uint32 A) MDFN_HOT;
 
@@ -149,6 +154,13 @@ void SH7095::RecalcMRWFP_0(void)
     MAHL(0,   -1, false)
    else
     MAHL(0, true, false)
+  }
+  else if(SH7095_BusSync)
+  {
+   if(CBH_Setting)
+    MAHL(0, 2, true)
+   else
+    MAHL(0, 2, false)
   }
   else if(CBH_Setting)
   {
@@ -213,7 +225,14 @@ void SH7095::RecalcMRWFP_1_7(void)
  }
  else
  {
-  MAHL(false, 1)
+  if(SH7095_BusSync)
+  {
+   MAHL(2, 1)
+  }
+  else
+  {
+   MAHL(false, 1)
+  }
   MAHL(false, 2)
   MAHL(false, 3)
   MAHL(false, 4)
@@ -2775,7 +2794,7 @@ INLINE void SH7095::Cache_CheckReadIncoherency(CacheEntry* cent, const int way, 
  }										\
 }
 
-#define CHECK_EXIT_RESUME() { if(NeedSlaveCall > 0) CPU[1].RunSlaveUntil(timestamp); if(NeedSlaveCall < 0) CPU[1].RunSlaveUntil_Debug(timestamp); }
+#define CHECK_EXIT_RESUME() { if(NeedSlaveCall == 2) SH7095_SlaveSync(timestamp); else if(NeedSlaveCall > 0) CPU[1].RunSlaveUntil(timestamp); if(NeedSlaveCall < 0) CPU[1].RunSlaveUntil_Debug(timestamp); }
 #define OnChipRegRead(T, A) OnChipRegRead_INLINE<T>(A)
 #define ExtBusRead(T, BurstHax, A) ExtBusRead_NI<which, false, T, BurstHax>(A)
 #define ExtBusWrite(T, A, V) ExtBusWrite_NI<which, false, T>(A, V)
