@@ -8,7 +8,8 @@
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
 **     -c CPU          pin the main thread to this CPU (Linux)
-**     -i FILE         write the last frame as a binary PPM image
+**     -i FILE         write the last frame as a binary PPM image; with a %d
+**                     in FILE, write every frame from the warm-up on instead
 **     -l FILE         load a raw core state (retro_serialize output; a
 **                     RetroArch .state must be unpacked first) after loading
 **     -r N            savestate round trip after frame N: serialize, run 300
@@ -19,6 +20,8 @@
 **                     and write "<tid> <pc> <frame>" lines plus the core's load
 **                     address to FILE; symbolize with nm on the unstripped core
 **     -t FILE         write each frame's wall time (ms), one per line
+**     -k F:ID[:LEN]   hold joypad button ID (libretro id) on port 0 from frame
+**                     F for LEN frames (default 1); repeatable, max 32
 **
 ** Prints one line per 300 frames (ms/frame) and a final summary:
 **   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X cpu_ms/frame=Y
@@ -59,6 +62,7 @@ static uintptr_t* prof_pc;
 static int* prof_tid;
 static int* prof_frame;
 static volatile int cur_frame;
+static int warm;
 static unsigned prof_n;
 static void prof_handler(int sig, siginfo_t* si, void* uc)
 {
@@ -166,9 +170,12 @@ static bool env_cb(unsigned cmd, void* data)
 static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch)
 {
  if(!data) return;	/* duped frame */
- if(img_path && img_frames_left == 0)
+ const int img_all = img_path && strstr(img_path, "%d");
+ if(img_path && (img_all ? cur_frame >= warm : img_frames_left == 0))
  {
-  FILE* f = fopen(img_path, "wb");
+  char path[1024];
+  snprintf(path, sizeof(path), img_path, cur_frame);
+  FILE* f = fopen(path, "wb");
   if(f)
   {
    fprintf(f, "P6\n%u %u\n255\n", w, h);
@@ -189,7 +196,16 @@ static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch)
 static void audio_sample_cb(int16_t l, int16_t r) { int16_t s[2] = { l, r }; fnv(&ahash, s, 4); nsamples++; }
 static size_t audio_batch_cb(const int16_t* data, size_t frames) { fnv(&ahash, data, frames * 4); nsamples += frames; return frames; }
 static void input_poll_cb(void) {}
-static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id) { (void)port; (void)device; (void)index; (void)id; return 0; }
+static struct { int frame, id, len; } keys[32];
+static int nkeys;
+static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id)
+{
+ (void)index;
+ if(port || device != 1 /* RETRO_DEVICE_JOYPAD */) return 0;
+ for(int i = 0; i < nkeys; i++)
+  if((unsigned)keys[i].id == id && cur_frame >= keys[i].frame && cur_frame < keys[i].frame + keys[i].len) return 1;
+ return 0;
+}
 
 /* Per-thread CPU time of this process (Linux): "name=seconds" pairs. */
 static void print_thread_cpu(FILE* out, int frames)
@@ -226,7 +242,7 @@ static double cpu_ms(void) { struct timespec t; clock_gettime(CLOCK_THREAD_CPUTI
 
 int main(int argc, char** argv)
 {
- int frames = 600, warm = 0;
+ int frames = 600;
  const char* prof_path = NULL;
  int pin_cpu = -1, rt_frame = -1;
  const char* times_path = NULL;
@@ -247,6 +263,11 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-l") && i + 1 < argc) load_path = argv[++i];
   else if(!strcmp(argv[i], "-t") && i + 1 < argc) times_path = argv[++i];
   else if(!strcmp(argv[i], "-i") && i + 1 < argc) img_path = argv[++i];
+  else if(!strcmp(argv[i], "-k") && i + 1 < argc && nkeys < 32)
+  {
+   keys[nkeys].len = 1;
+   if(sscanf(argv[++i], "%d:%d:%d", &keys[nkeys].frame, &keys[nkeys].id, &keys[nkeys].len) >= 2) nkeys++;
+  }
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
