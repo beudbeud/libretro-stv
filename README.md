@@ -130,7 +130,6 @@ Both analog stick indices are read, so the stick works regardless of which index
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `mednafen_stv_frameskip` | `disabled` | Frameskip: disabled / auto / 1–5 |
 | `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: Fast (recommended) / Full (accurate, slow). Restart required. |
 
 ---
