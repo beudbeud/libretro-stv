@@ -482,6 +482,47 @@ void CART_STV_Init(CartInfo* c, GameFile* gf, const STVGameInfo* sgi)
    }
   }
 
+  /* Virtua Fighter Remix: the slave SH-2's zoom routine spills R1/R2 through
+   * a scratch vector shared with the master and reads them back six
+   * instructions later.  When the master's own use of that scratch lands in
+   * between (timing-dependent), the slave computes a wrong zoom and the
+   * floor and sprites jump for one tick.  Replace the spill with register
+   * moves: same result, no shared RAM.  Two copies of the routine. */
+  static const struct { const char* game; const char* fname; uint32 offset; uint16 old_op; uint16 new_op; } code_patches[] =
+  {
+   { "Virtua Fighter Remix", "epr17944.13", 0x20e64, 0x1010, 0x0009 }, // MOV.L R1,@(0,R0)  -> NOP
+   { "Virtua Fighter Remix", "epr17944.13", 0x20e66, 0x1021, 0x0009 }, // MOV.L R2,@(4,R0)  -> NOP
+   { "Virtua Fighter Remix", "epr17944.13", 0x20e70, 0x5401, 0x6423 }, // MOV.L @(4,R0),R4  -> MOV R2,R4
+   { "Virtua Fighter Remix", "epr17944.13", 0x20e72, 0x5500, 0x6513 }, // MOV.L @(0,R0),R5  -> MOV R1,R5
+   { "Virtua Fighter Remix", "epr17944.13", 0x20fd8, 0x1010, 0x0009 },
+   { "Virtua Fighter Remix", "epr17944.13", 0x20fda, 0x1021, 0x0009 },
+   { "Virtua Fighter Remix", "epr17944.13", 0x20fe4, 0x5401, 0x6423 },
+   { "Virtua Fighter Remix", "epr17944.13", 0x20fe6, 0x5500, 0x6513 },
+  };
+
+  for(auto const& cp : code_patches)
+  {
+   if(strcmp(cp.game, sgi->name))
+    continue;
+
+   for(size_t i = 0; i < sizeof(sgi->rom_layout) / sizeof(sgi->rom_layout[0]) && sgi->rom_layout[i].size; i++)
+   {
+    const STVROMLayout* rle = &sgi->rom_layout[i];
+
+    if(strcmp(rle->fname, cp.fname) || rle->map != STV_MAP_BYTE || cp.offset + 1 >= rle->size)
+     continue;
+
+    const uint32 a0 = rle->offset + ((cp.offset + 0) << 1);
+    const uint32 a1 = rle->offset + ((cp.offset + 1) << 1);
+
+    if(ne16_rbo_be<uint8>(ROM, a0) != (cp.old_op >> 8) || ne16_rbo_be<uint8>(ROM, a1) != (cp.old_op & 0xFF))
+     continue;
+
+    ne16_wbo_be<uint8>(ROM, a0, cp.new_op >> 8);
+    ne16_wbo_be<uint8>(ROM, a1, cp.new_op & 0xFF);
+   }
+  }
+
   if(sgi->romtwiddle == STV_ROMTWIDDLE_SANJEON)
   {
    for(uint32 i = 0; i < 0x3000000 / sizeof(uint64); i++)
