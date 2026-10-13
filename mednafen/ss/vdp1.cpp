@@ -49,6 +49,7 @@
 #include "vdp1_common.h"
 #include <mednafen/MThreading.h>
 #include <atomic>
+#include <thread>
 
 enum : int { VDP1_UpdateTimingGran = 263 };
 enum : int { VDP1_IdleTimingGran = 1019 };
@@ -182,7 +183,6 @@ uint16* MeshFBDrawWhichPtr;
 // arg is true. Default false = hardware-accurate stipple.
 bool MeshImproved = false;
 
-static INLINE void WaitDrawThread(void);
 // Swaps the draw/display framebuffers, the improved-mesh buffer in lockstep.
 // The mesh data is transient: the new draw side always starts clean, since
 // the game-driven erase won't fire with manual buffer management.
@@ -195,6 +195,7 @@ static void SwapDrawFB(void)
   memset(MeshFBDrawWhichPtr, 0, sizeof(MeshFB[0]));
 }
 
+static INLINE void WaitDrawThread(void);
 void SetMeshImproved(bool improved)
 {
  WaitDrawThread();
@@ -825,8 +826,8 @@ static int32 (*const resume_table[0x8])(const uint16* cmd_data) =
 //
 // With VDP1INSTANT the whole command list is drawn in one go, so the result
 // only depends on VRAM and the drawing registers at that moment. The main
-// thread freezes a copy of VRAM (DrawVRAM, with the frozen command table on
-// top, exactly what DoDrawing would read), walks the list without drawing to
+// thread freezes a copy of VRAM (DrawVRAM) and of the command-table snapshot
+// (DrawCmdSnapshot, exactly what DoDrawing reads), walks the list without drawing to
 // get the end-of-draw state the game can observe (EDSR, the VDP1 interrupt,
 // COPR), and hands the drawing to a thread. That thread renders the list once
 // per horizontal band of framebuffer rows, top band first, so GetLine(line)
@@ -840,6 +841,14 @@ static MThreading::Thread* DrawThread = nullptr;
 static MThreading::Sem* DrawThreadSem = nullptr;
 static std::atomic<bool> DrawThreadQuit(false);
 static uint16 DrawVRAM[0x40000];
+static uint16 DrawCmdSnapshot[0x4000];	// frozen command table, like DoDrawing's VRAMCmdSnapshot
+
+// Command words come from the frozen command table; textures, CLUTs and gouraud
+// tables from the VRAM copy, exactly like the inline path (snapshot vs live VRAM).
+static INLINE void DrawFetchCommand(uint32 addr, uint16* cd)
+{
+ memcpy(cd, &(((addr + 0x10) <= 0x4000) ? DrawCmdSnapshot : DrawVRAM)[addr], 0x10 * sizeof(uint16));
+}
 static uint32 DrawStartAddr;
 static int32 DrawStartRetAddr;
 static const int32 DrawBands[] = { 0, 32, 96, 160, 256 };
@@ -856,7 +865,7 @@ static void DrawListPass(void)
 
  for(unsigned guard = 0; guard < 0x10000; guard++)
  {
-  memcpy(cd, &DrawVRAM[addr], sizeof(cd));
+  DrawFetchCommand(addr, cd);
 
   if(!(cd[0] & 0xC000))
   {
@@ -936,10 +945,10 @@ static void WaitDrawThreadBands(int n)
  if(!DrawJobActive)
   return;
 
+ /* The thread is at most a couple of ms behind: spin, but give the core away
+  * so a descheduled drawing thread gets it (the Pi has 4 cores for 5 threads). */
  while(DrawBandsDone.load(std::memory_order_acquire) < n)
- {
-  /* The thread is at most a couple of ms behind; spin. */
- }
+  std::this_thread::yield();
 
  if(n >= DrawNumBands)
  {
@@ -1152,7 +1161,7 @@ static void ThreadedInstantDraw(void)
  }
 
  memcpy(DrawVRAM, VRAM, sizeof(DrawVRAM));
- memcpy(DrawVRAM, VRAMCmdSnapshot, sizeof(VRAMCmdSnapshot));	// what DoDrawing reads for the command table
+ memcpy(DrawCmdSnapshot, VRAMCmdSnapshot, sizeof(DrawCmdSnapshot));
 
  DrawStartAddr = CurCommandAddr;
  DrawStartRetAddr = RetCommandAddr;
@@ -1160,7 +1169,7 @@ static void ThreadedInstantDraw(void)
  // Walk the list (no drawing) exactly like DoDrawing.
  for(unsigned guard = 0; guard < 0x10000; guard++)
  {
-  memcpy(CommandData, &DrawVRAM[CurCommandAddr], sizeof(CommandData));
+  DrawFetchCommand(CurCommandAddr, CommandData);
 
   if(MDFN_LIKELY(!(CommandData[0] & 0xC000)))
   {
@@ -1218,8 +1227,6 @@ static void ThreadedInstantDraw(void)
  }
  DrawingActive = false;	// a list that never ends is cut short, like the sanity limit would
  WalkDone:;
- InstantDrawSanityLimit = CycleCounter;
-
  DVRAM = DrawVRAM;
  DrawJobActive = true;
  DrawBandsDone.store(0, std::memory_order_release);
