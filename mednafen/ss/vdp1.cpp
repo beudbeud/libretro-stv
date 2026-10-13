@@ -183,6 +183,18 @@ uint16* MeshFBDrawWhichPtr;
 bool MeshImproved = false;
 
 static INLINE void WaitDrawThread(void);
+// Swaps the draw/display framebuffers, the improved-mesh buffer in lockstep.
+// The mesh data is transient: the new draw side always starts clean, since
+// the game-driven erase won't fire with manual buffer management.
+static void SwapDrawFB(void)
+{
+ FBDrawWhich = !FBDrawWhich;
+ FBDrawWhichPtr = FB[FBDrawWhich];
+ MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
+ if(MeshImproved)
+  memset(MeshFBDrawWhichPtr, 0, sizeof(MeshFB[0]));
+}
+
 void SetMeshImproved(bool improved)
 {
  WaitDrawThread();
@@ -1376,17 +1388,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
      VRAMUsageEnd();
     }
 
-    FBDrawWhich = !FBDrawWhich;
-    FBDrawWhichPtr = FB[FBDrawWhich];
-    MeshFBDrawWhichPtr = MeshFB[FBDrawWhich];
-
-    // Unconditionally clear the new draw side of MeshFB. Game-driven
-    // erase (VB erase, per-scanline GetLine erase) is gated on the
-    // game's FBCR/EraseParams settings, which won't fire if the game
-    // uses manual buffer management. Mesh data is transient by nature
-    // - we always want a fresh slate per frame.
-    if(MeshImproved)
-     memset(MeshFBDrawWhichPtr, 0, sizeof(MeshFB[0]));
+    SwapDrawFB();
 
     SS_DBGTI(SS_DBG_VDP1, "[VDP1] Displayed framebuffer changed to %d.", !FBDrawWhich);
 
@@ -1497,8 +1499,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
     VRAMUsageEnd();
    }
 
-   FBDrawWhich = !FBDrawWhich;
-   FBDrawWhichPtr = FB[FBDrawWhich];
+   SwapDrawFB();
 
    SS_DBGTI(SS_DBG_VDP1, "[VDP1] VDP1INSTANT early swap: displayed FB → %d.", !FBDrawWhich);
 
@@ -1608,8 +1609,7 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
      VRAMUsageEnd();
     }
 
-    FBDrawWhich = !FBDrawWhich;
-    FBDrawWhichPtr = FB[FBDrawWhich];
+    SwapDrawFB();
 
     EDSR = EDSR >> 1;
     LOPR = CurCommandAddr >> 2;
