@@ -115,7 +115,7 @@ Both analog stick indices are read, so the stick works regardless of which index
 | `mednafen_stv_h_overscan` | `enabled` | Show horizontal overscan pixels |
 | `mednafen_stv_h_blend` | `disabled` | Horizontal blend filter (anti-dithering) |
 | `mednafen_stv_mesh_transparency` | `disabled` | Replace VDP1 stipple (checkerboard) with 50% blend for smoke/shadow/fade effects. 16-bit framebuffer only. |
-| `mednafen_stv_deinterlacer` | `blend` | 480i handling: Blend (smooth, recommended) / Off (renderer bob) / Weave / Bob / Bob with offset / Blend gamma-correct |
+| `mednafen_stv_deinterlacer` | `blend` | 480i handling (Decathlete, VF Kids, Astra Superstars): `blend` (smooth, recommended for LCD; runs on the VDP2 render thread) / `off` (renderer-side bob, full resolution) / `weave` (CRT-like, combing on motion) / `bob` / `bob_offset` (sharp, flickers) / `blend_sw` (Mednafen's original CPU blend, slower) / `blend_rg` (gamma-correct blend, more CPU) |
 | `mednafen_stv_slstart` | `8` | First displayed NTSC scanline (0 / 2 / 4 / 8) |
 | `mednafen_stv_slend` | `231` | Last displayed NTSC scanline (224 / 231 / 234 / 239) |
 | `mednafen_stv_rotation` | `auto` | Display rotation. `auto` follows the game database (TATE games rotated 90°, yoko games unrotated). Force `0` / `90` / `180` / `270` for special setups (e.g. `0` on a physically-rotated screen). |
@@ -130,7 +130,14 @@ Both analog stick indices are read, so the stick works regardless of which index
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: Fast (recommended) / Full (accurate, slow). Restart required. |
+| `mednafen_stv_cpu_cache` | `data_cb` | SH-2 cache emulation: `data_cb` Fast (recommended) / `full` (accurate, slow). Restart required. |
+| `mednafen_stv_sound_thread` | `enabled` | Run the 68000 and SCSP on a separate core. Faster on multi-core devices, but emulation is no longer bit-for-bit reproducible (netplay needs it off). Restart required. |
+| `mednafen_stv_vdp1_thread` | `disabled` | Draw VDP1 sprites on a separate core for the games that draw their whole sprite list at once (Astra SuperStars, Decathlete, Virtua Fighter Kids). Identical image, up to ~1.5 ms less per frame. Experimental. Restart required. |
+| `mednafen_stv_sh2_relaxed_sync` | `disabled` | Let the master SH-2 run ahead of the slave until its next bus access instead of resynchronizing after every instruction. Bus accesses stay in order; cross-CPU interrupts and slave-written data may be seen slightly later. ~2 ms less per frame on Decathlete on a Raspberry Pi 5. Experimental, ignored with `full` CPU cache. Restart required. |
+
+Frames the frontend asks not to render (run-ahead, preemptive frames) skip the video upload and audio output automatically; there is no frameskip option.
+
+On a Raspberry Pi 5, Decathlete and Virtua Fighter Kids run at a steady 60 fps with `mednafen_stv_vdp1_thread` and `mednafen_stv_sh2_relaxed_sync` enabled (the other games don't need them).
 
 ---
 
@@ -146,19 +153,32 @@ cmake --build build_lr -j$(nproc)
 # Output: build_lr/libretro/mednafen_stv_libretro.so
 ```
 
-### Cross-compile (e.g. aarch64 / Raspberry Pi)
+The CMake build applies the bundled profile-guided-optimization profile (`pgo/`, aarch64 GCC only, ~6% less CPU on a Pi 5). Pass `-DSTV_PGO_USE=OFF` to build without it, e.g. for A/B measurements; see `CMakeLists.txt` for how to regenerate it.
+
+### Cross-compile with the libretro Makefile
 
 ```bash
+# Linux aarch64 (e.g. Raspberry Pi)
 make -f libretro/Makefile.libretro TARGET_CROSS=aarch64-buildroot-linux-gnu-
+# Windows
+make -f libretro/Makefile.libretro platform=win64 TARGET_CROSS=x86_64-w64-mingw32-
+# Android
+make -f libretro/Makefile.libretro platform=android-arm64 ANDROID_NDK_ROOT=/path/to/ndk
+make -f libretro/Makefile.libretro platform=android-armv7 ANDROID_NDK_ROOT=/path/to/ndk
 ```
 
-### Android (arm64-v8a)
-
-```bash
-make -f libretro/Makefile.libretro platform=android_arm64
-```
+The Makefile build does not use the PGO profile.
 
 **Note on zstd linking:** cross-compile uses dynamic `libzstd.so`; native builds link static `libzstd.a` to avoid a runtime dependency.
+
+### Tests and measurements
+
+`cmake -B build_lr -DSTV_BUILD_TESTS=ON` also builds the headless tools in `tests/`:
+
+- `stv_headless <core.so> <rom.zip>` runs the core without a frontend and prints hashes of the video/audio output plus ms/frame, so two builds or two option sets can be compared (`-o key=value`, `-l state` to start from a raw savestate, `-p file` sampling profiler, `-r N` savestate round-trip check). See the file header for all options.
+- `dspjit_fuzz_test` checks the AArch64 SCSP DSP JIT against the interpreter on random programs.
+
+Set `MDFN_SS_FRAMESTATS=1` to have the core log the real frame rate and time spent in the core every 300 frames, for measuring inside RetroArch on the target device.
 
 ---
 
