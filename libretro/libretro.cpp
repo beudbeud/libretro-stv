@@ -166,7 +166,6 @@ static int  g_frameskip_interval = 1;
 static int  g_frameskip_counter  = 0;
 /* FS_AUTO: frontend audio buffer status (RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK). */
 static bool     g_audio_buf_active    = false;
-static unsigned g_audio_buf_occupancy = 0;
 static bool     g_audio_buf_underrun  = false;
 static bool     g_audio_buf_cb_set    = false;	/* callback registered with the frontend */
 static unsigned g_audio_latency_req   = 0;	/* minimum latency to request from retro_run() */
@@ -424,7 +423,6 @@ static void RETRO_CALLCONV audio_buffer_status_cb(bool active, unsigned occupanc
 {
     g_abs_calls++; if(occupancy < g_abs_occ_min) g_abs_occ_min = occupancy; g_abs_underruns += underrun_likely;
     g_audio_buf_active    = active;
-    g_audio_buf_occupancy = occupancy;
     g_audio_buf_underrun  = underrun_likely;
 }
 
@@ -983,6 +981,7 @@ RETRO_API void retro_unload_game(void)
         environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, nullptr);
         g_audio_buf_cb_set = false;
     }
+    g_audio_latency_dirty = false;
     g_bios_state_saved        = false;
     g_bios_intback_resaved    = false;
     g_bios_service_entered    = false;
@@ -1063,17 +1062,20 @@ RETRO_API void retro_run(void)
 
     /* Frameskip: may additionally skip rendering this frame */
     if(g_frameskip_type == FS_AUTO) {
+        bool auto_skip;
         /* The frontend mutes audio while fast-forwarding, so the AV-enable
          * hint above may not fire; render only every other frame instead. */
-        if(g_is_fastforwarding && (g_frameskip_counter ^= 1))
-            skip_frame = true;
+        if(g_is_fastforwarding)
+            auto_skip = (g_frameskip_counter ^= 1);
         /* At normal speed: skip when the frontend predicts an audio underrun,
          * i.e. emulation has fallen behind real time. A skipped frame saves the
-         * frontend's video upload (the emulation itself always runs). */
-        else if(!g_is_fastforwarding && g_audio_buf_active && g_audio_buf_underrun
-                && g_auto_skipped_in_row < FS_AUTO_MAX_IN_ROW)
-            skip_frame = true;
-        g_auto_skipped_in_row = skip_frame ? g_auto_skipped_in_row + 1 : 0;
+         * frontend's video upload (the emulation itself always runs). Frames the
+         * frontend hides itself (run-ahead) don't count toward the cap. */
+        else
+            auto_skip = g_audio_buf_active && g_audio_buf_underrun
+                        && g_auto_skipped_in_row < FS_AUTO_MAX_IN_ROW;
+        g_auto_skipped_in_row = auto_skip ? g_auto_skipped_in_row + 1 : 0;
+        skip_frame |= auto_skip;
     } else if(g_frameskip_type == FS_MANUAL) {
         if(g_frameskip_counter == 0) {
             g_frameskip_counter = g_frameskip_interval;
