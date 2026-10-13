@@ -108,6 +108,8 @@ uint32 DTACounter;
 static bool vb_status, hb_status;
 static bool vbcdpending;
 static bool FBManualPending;
+static uint16 FBCRLatch;	// HORRIBLEHACK_VDP1FBCRLATCH: FBCR written during vblank, applied at the next vblank-in
+static bool FBCRLatchPending;
 static bool FBVBErasePending;
 static bool FBVBEraseActive;
 static bool LateSwapPending;   // HORRIBLEHACK_VDP1LATESWAP: vblank-start swap not yet fired
@@ -385,6 +387,8 @@ void Reset(bool powering_up)
  //SS_SetPhysMemMap(0x05C80000, 0x05CFFFFF, FB[FBDrawWhich], sizeof(FB[0]), true);
 
  FBManualPending = false;
+ FBCRLatch = 0;
+ FBCRLatchPending = false;
  FBVBErasePending = false;
  FBVBEraseActive = false;
  LateSwapPending = false;
@@ -1297,6 +1301,13 @@ void SetHBVB(const sscpu_timestamp_t event_timestamp, const bool new_hb_status, 
 
  hb_status = new_hb_status;
  vb_status = new_vb_status;
+ if(new_vb_status && !old_vb_status && FBCRLatchPending)
+ {
+  FBCRLatchPending = false;
+  FBCR = FBCRLatch;
+  SyncDrawRegs();
+  FBManualPending |= FBCRLatch & 0x2;
+ }
 
  if(MDFN_UNLIKELY(vbcdpending & hb_status & (old_hb_status ^ hb_status)))
  {
@@ -1860,6 +1871,17 @@ static INLINE void WriteReg(const unsigned which, const uint16 value)
 	break;
 
   case 0x1:	// FBCR
+	/* HORRIBLEHACK_VDP1FBCRLATCH: per the VDP1 manual, FCM/FCT written by the
+	 * CPU are taken into VDP1 at the field change.  A write made after
+	 * vblank-in (Virtua Fighter Remix writes FCT one line after the vblank
+	 * IRQ, then streams the command list until well into active display)
+	 * therefore only acts on the following field. */
+	if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_VDP1FBCRLATCH) && vb_status)
+	{
+	 FBCRLatch = value & 0x1F;
+	 FBCRLatchPending = true;
+	 break;
+	}
 	FBCR = value & 0x1F;
 	SyncDrawRegs();
 	FBManualPending |= value & 0x2;
@@ -2187,6 +2209,8 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(FBDrawWhich),
 
   SFVAR(FBManualPending),
+  SFVAR(FBCRLatch),
+  SFVAR(FBCRLatchPending),
 
   SFVAR(FBVBErasePending),
   SFVAR(FBVBEraseActive),

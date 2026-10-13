@@ -1722,6 +1722,14 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
  {
  };
 
+ /* Games that write FBCR (manual frame change) right after the vblank-in
+  * interrupt and expect the change one field later: without the latch the
+  * sprites run one frame ahead of the RBG0 floor and its texture shimmers. */
+ static const char* const vdp1_fbcr_latch[] =
+ {
+  "Virtua Fighter Remix",
+ };
+
  /* Puzzle, board, quiz, card, fishing, golf, and other low-sprite-throughput
   * games do not trigger the VDP1 bus-contention issue that
   * HORRIBLEHACK_VDP1RWDRAWSLOWDOWN compensates for.  Every other title
@@ -1787,6 +1795,13 @@ uint32 DB_GetSTVHacks(const STVGameInfo* sgi)
    break;
   }
 
+ for(const char* name : vdp1_fbcr_latch)
+  if(!strcmp(sgi->name, name))
+  {
+   hacks |= HORRIBLEHACK_VDP1FBCRLATCH;
+   break;
+  }
+
  return hacks;
 }
 
@@ -1808,6 +1823,9 @@ std::string DB_GetHHDescriptions(const uint32 hhv)
 
  if(hhv & HORRIBLEHACK_VDP1INSTANT)
   sv += "Execute VDP1 commands instantly. ";
+
+ if(hhv & HORRIBLEHACK_VDP1FBCRLATCH)
+  sv += "Apply VDP1 FBCR writes made during vblank at the next vblank. ";
 
 /*
  if(hhv & HORRIBLEHACK_SCUINTDELAY)
