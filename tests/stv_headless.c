@@ -59,11 +59,12 @@ static uintptr_t* prof_pc;
 static int* prof_tid;
 static int* prof_frame;
 static volatile int cur_frame;
-static volatile unsigned prof_n;
+static unsigned prof_n;
 static void prof_handler(int sig, siginfo_t* si, void* uc)
 {
  (void)sig; (void)si;
- unsigned i = prof_n;
+ /* SIGPROF can land on any thread: claim the slot atomically */
+ unsigned i = __atomic_fetch_add(&prof_n, 1, __ATOMIC_RELAXED);
  if(i < PROF_MAX)
  {
 #if defined(__aarch64__)
@@ -75,7 +76,6 @@ static void prof_handler(int sig, siginfo_t* si, void* uc)
 #endif
   prof_tid[i] = (int)syscall(SYS_gettid);
   prof_frame[i] = cur_frame;
-  prof_n = i + 1;
  }
 }
 static void prof_start(void)
@@ -99,6 +99,7 @@ static void prof_dump(const char* path, void* core_handle)
  FILE* f = fopen(path, "w");
  if(!f) { perror(path); return; }
  fprintf(f, "base %lx\n", (unsigned long)di.dli_fbase);
+ if(prof_n > PROF_MAX) prof_n = PROF_MAX;
  for(unsigned i = 0; i < prof_n; i++) fprintf(f, "%d %lx %d\n", prof_tid[i], (unsigned long)prof_pc[i], prof_frame[i]);
  fclose(f);
  fprintf(stderr, "profile: %u samples -> %s\n", prof_n, path);
