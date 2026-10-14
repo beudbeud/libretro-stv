@@ -174,7 +174,7 @@ jobs:
 
       - name: Rename artifact
         run: |
-          mv mednafen_stv_libretro.so \
+          mv mednafen_stv_libretro_android.so \
              mednafen_stv_libretro_android_${{ matrix.abi }}.so
 
       - name: Upload assets to release
