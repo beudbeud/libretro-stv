@@ -101,6 +101,9 @@ target_compile_definitions(mdfn_core PUBLIC
 )
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
+if(MINGW)
+    set(ZLIB_USE_STATIC_LIBS ON)
+endif()
 find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 find_library(ZSTD_LIB zstd REQUIRED)

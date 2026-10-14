@@ -52,6 +52,9 @@ else()
 endif()
 target_link_libraries(mednafen_stv_libretro PRIVATE mdfn_core ${ZSTD_LINK})
 
+# RetroArch does not ship the MinGW runtime DLLs: link them in (issue #39).
+target_link_options(mednafen_stv_libretro PRIVATE $<$<BOOL:${MINGW}>:-static>)
+
 set_target_properties(mednafen_stv_libretro PROPERTIES
     C_VISIBILITY_PRESET   hidden
     CXX_VISIBILITY_PRESET hidden
