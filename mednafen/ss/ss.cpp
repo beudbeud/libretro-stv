@@ -138,9 +138,6 @@ static uintptr_t SH7095_FastMap[1U << (32 - SH7095_EXT_MAP_GRAN_BITS)];
 int32 SH7095_mem_timestamp;
 static uint32 SH7095_BusLock;
 static uint32 SH7095_DB;
-// Relaxed SH-2 sync (ss.sh2.relaxed_sync), data-cache-only mode: the master catches the slave up
-// right before each of its external bus accesses (NeedSlaveCall == 2); idle DMA stops polling.
-static bool SH7095_BusSync = false;
 #include "scu.inc"
 
 #include "debug.inc"

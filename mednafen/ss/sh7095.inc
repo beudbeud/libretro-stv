@@ -107,6 +107,9 @@ SH7095::SH7095(const char* const name_arg, const unsigned event_id_dma_arg, uint
  Init(false, false);
 }
 
+// Data-cache-only mode with bus-access sync: the master catches the slave up right before each of
+// its external bus accesses (NeedSlaveCall == 2). Defined in ss.cpp.
+static bool SH7095_BusSync = false;
 #ifdef SS_DIAG_STEPS
 static uint64 SS_DiagSteps[2];
 static uint64 SS_DiagEvents[SS_EVENT__COUNT];
@@ -740,12 +743,6 @@ sscpu_timestamp_t SH7095::DMA_Update(sscpu_timestamp_t et)
   DMA_CheckEnterBurstHack();
   RecalcPendingIntPEX();	// TODO: conditionalize(or make RecalcPendingIntPEX() less expensive).
  }
-
- // Relaxed sync: an idle DMAC stops polling every 128 cycles; DMA_StartSG() (CHCR/DMAOR writes, the
- // only things that can make a channel runnable) re-arms the event. Not in exact mode, where the
- // poll phase is part of the reproduced timing.
- if(SH7095_BusSync && et >= DMA_SGEndTimestamp && !DMA_RunCond(0) && !DMA_RunCond(1))
-  return SS_EVENT_DISABLED_TS;
 
  return et + ((et < DMA_SGEndTimestamp) ? 32 : 128);
 }
