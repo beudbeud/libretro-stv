@@ -652,6 +652,9 @@ static INLINE bool EventHandler(const sscpu_timestamp_t timestamp)
   sscpu_timestamp_t nt;
 
   nt = e->event_handler(e->event_time);
+#ifdef SS_DIAG_STEPS
+  SS_DiagEvents[e - events]++;
+#endif
 
 #ifdef MDFN_ENABLE_DEV_BUILD
   if(MDFN_UNLIKELY(nt <= etime))
@@ -706,6 +709,13 @@ void SS_RequestMLExit(void)
 // Data-cache-only mode (EmulateICache=false) only.
 //
 static bool SH2_NoSyncOp[256];
+
+#ifdef SS_DIAG_STEPS
+// Build with -DSS_DIAG_STEPS: instructions executed per SH-2, printed at exit. Comparing the slave's
+// count between sync modes over the same frames shows whether a scheduling change starves it
+// (a starved slave looks like a speedup).
+static struct SS_DiagPrint { ~SS_DiagPrint() { fprintf(stderr, "sh2 steps: master=%llu slave=%llu\n", (unsigned long long)SS_DiagSteps[0], (unsigned long long)SS_DiagSteps[1]); fprintf(stderr, "events:"); for(unsigned i = 0; i < SS_EVENT__COUNT; i++) fprintf(stderr, " %u=%llu", i, (unsigned long long)SS_DiagEvents[i]); fprintf(stderr, "\n"); } } SS_DiagPrinter;
+#endif
 
 static NO_INLINE void SH7095_SlaveSync(sscpu_timestamp_t bound_timestamp)
 {
