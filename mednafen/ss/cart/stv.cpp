@@ -164,9 +164,8 @@ static MDFN_HOT void Write(uint32 A, uint16* DB)
      * Bank 1: 0x2800000-0x2FFFFFFF → cart byte 0x800000
      * Bank 2: 0x3000000-0x37FFFFF → cart byte 0x1000000 */
     {
-     static const uint32_t bank_word_offsets[3] = {0, 0x400000, 0x800000};
      const uint32 bank = ((A - 0x02000000) & 0x1800000) >> 23;
-     chip5838.rom = chip5838.rom_phys + (bank < 3 ? bank_word_offsets[bank] : 0);
+     chip5838.set_bank(bank < 3 ? bank : 0);
     }
     chip5838.srcaddr_w16(full);
     return;
@@ -291,6 +290,8 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(chip5838.val),
   SFVAR(chip5838.num_bits),
   SFVAR(chip5838.active_bank),
+  SFVAR(chip5838.active),
+  SFVAR(chip5838.pending_srcaddr_hi),
   SFPTR8N((uint8*)&chip5838.cs, sizeof(chip5838.cs), "chip5838_cs"),
 
   /* 315-5881 chip state */
@@ -326,7 +327,8 @@ static void StateAction(StateMem* sm, const unsigned load, const bool data_only)
 
  if(load)
  {
-
+  if(ECChip == STV_EC_CHIP_315_5838)
+   chip5838.set_bank((unsigned)chip5838.active_bank < 3 ? chip5838.active_bank : 0);
  }
 }
 
