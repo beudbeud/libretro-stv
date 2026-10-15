@@ -27,7 +27,7 @@ namespace MDFN_IEN_SS
 
 void CDB_Init(void) MDFN_COLD;
 void CDB_Kill(void) MDFN_COLD;
-void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_COLD;
+void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only, const bool sector_data) MDFN_COLD;
 
 void CDB_SetDisc(bool tray_open, CDInterface* cdif) MDFN_COLD;
 

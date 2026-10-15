@@ -2339,7 +2339,7 @@ static MDFN_COLD void StateAction(StateMem* sm, const unsigned load, const bool 
 
  SMPC_StateAction(sm, load, data_only);
 
- CDB_StateAction(sm, load, data_only);
+ CDB_StateAction(sm, load, data_only, ActiveCartType != CART_STV);
  VDP1::StateAction(sm, load, data_only);
  VDP2::StateAction(sm, load, data_only);
 
