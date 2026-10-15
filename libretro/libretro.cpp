@@ -341,18 +341,25 @@ static void update_input()
         int ry = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
         int ax = stv_analog_deadzone(lx) + stv_analog_deadzone(rx);
         int ay = stv_analog_deadzone(ly) + stv_analog_deadzone(ry);
-        dx += ax * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
-        dy += ay * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
 
         /* D-pad as a fixed-velocity movement source. Works on its own and also
          * catches the case where RetroArch's Analog-to-Digital converts the
          * stick into D-pad presses (then the analog read above stays 0). The
          * step equals a full stick deflection, scaled by the same sensitivity. */
-        const int step = 32767 * g_trackball_sensitivity / STV_TRACKBALL_ANALOG_DIV;
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))  dx -= step;
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) dx += step;
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))    dy -= step;
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))  dy += step;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))  ax -= 32767;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) ax += 32767;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))    ay -= 32767;
+        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))  ay += 32767;
+
+        /* Carry the fraction of a count from frame to frame: truncating each
+         * frame made a light deflection at low sensitivity move nothing. */
+        static int64_t rem_x, rem_y;
+        rem_x += (int64_t)ax * g_trackball_sensitivity;
+        rem_y += (int64_t)ay * g_trackball_sensitivity;
+        dx += (int)(rem_x / STV_TRACKBALL_ANALOG_DIV);
+        dy += (int)(rem_y / STV_TRACKBALL_ANALOG_DIV);
+        rem_x %= STV_TRACKBALL_ANALOG_DIV;
+        rem_y %= STV_TRACKBALL_ANALOG_DIV;
 
         MDFN_IEN_SS::STVIO_SetTrackball(dx, dy);
     }

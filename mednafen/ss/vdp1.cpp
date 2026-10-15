@@ -2276,6 +2276,7 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(VRAMCmdWrittenThisScanline),
   SFVAR(VRAMCmdSeenAnyWrite),
   SFVAR(VDP1InstantDrawDoneThisFrame),
+  SFVAR(VRAMCmdWriteFrame),
 
   SFLINK(Prim_StateRegs),
 
@@ -2290,13 +2291,6 @@ void StateAction(StateMem* sm, const unsigned load, const bool data_only)
   if(RetCommandAddr >= 0)
    RetCommandAddr &= 0x3FFFF;
 
-  /* After load, treat all command slots as stale so the first frame uses
-   * the restored VRAMCmdSnapshot as-is without mixing in live VRAM writes
-   * from a previous session. */
-  memset(VRAMCmdWriteFrame, 0, sizeof(VRAMCmdWriteFrame));
-  VRAMCmdWrittenThisScanline = false;
-  VRAMCmdSeenAnyWrite = false;
-  VDP1InstantDrawDoneThisFrame = false;
 
   DTACounter &= 0xFF;
 

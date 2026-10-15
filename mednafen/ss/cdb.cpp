@@ -4225,7 +4225,7 @@ void CDB_Write_DBM(uint32 offset, uint16 DB, uint16 mask)
 
 
 
-void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only)
+void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only, const bool sector_data)
 {
  SFORMAT StateRegs[] =
  {
@@ -4249,7 +4249,7 @@ void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only)
 
   //
   //
-  SFVAR(Buffers->Data, NumBuffers, sizeof(*Buffers), Buffers),
+  SFCONDVAR(sector_data, Buffers->Data, NumBuffers, sizeof(*Buffers), Buffers),	// 470 KB, never used without a CD drive (ST-V)
   SFVAR(Buffers->Prev, NumBuffers, sizeof(*Buffers), Buffers),
   SFVAR(Buffers->Next, NumBuffers, sizeof(*Buffers), Buffers),
   //
@@ -4411,6 +4411,10 @@ void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only)
 
  if(load)
  {
+  if(!sector_data)
+   for(auto& b : Buffers)
+    memset(b.Data, 0, sizeof(b.Data));
+
   if(load < 0x00102600)
   {
    if(DrivePhase == DRIVEPHASE_PLAY && SecPreBuf_In)

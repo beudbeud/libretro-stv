@@ -110,6 +110,10 @@ SH7095::SH7095(const char* const name_arg, const unsigned event_id_dma_arg, uint
 // Data-cache-only mode with bus-access sync: the master catches the slave up right before each of
 // its external bus accesses (NeedSlaveCall == 2). Defined in ss.cpp.
 static bool SH7095_BusSync = false;
+#ifdef SS_DIAG_STEPS
+static uint64 SS_DiagSteps[2];
+static uint64 SS_DiagEvents[SS_EVENT__COUNT];
+#endif
 static void SH7095_SlaveSync(sscpu_timestamp_t bound_timestamp);
 
 template<unsigned which, int NeedSlaveCall, bool CacheBypassHack, typename T, unsigned region, bool CacheEnabled, int32 IsInstr>
@@ -3438,6 +3442,9 @@ static NO_INLINE MDFN_HOT void DoIDIF_NI(void)
 template<unsigned which, bool EmulateICache, bool DebugMode>
 INLINE void SH7095::Step(void)
 {
+#ifdef SS_DIAG_STEPS
+ SS_DiagSteps[which]++;
+#endif
  //
  // Ideally, we would place SPEPRecover: after the FRT event check, but doing
  // so causes gcc(multiple versions) to produce inconceivably awful code under certain conditions
