@@ -63,6 +63,12 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel $(nproc)
 
+      - name: Check the DLL has no MinGW runtime imports
+        shell: msys2 {0}
+        run: |
+          objdump -p build/libretro/mednafen_stv_libretro.dll | grep 'DLL Name'
+          ! objdump -p build/libretro/mednafen_stv_libretro.dll | grep -iE 'libstdc|libgcc|winpthread|zlib1|zstd'
+
   build-macos:
     strategy:
       matrix:
