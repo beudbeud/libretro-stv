@@ -823,6 +823,14 @@ static INLINE int32 RunLoop_INLINE(EmulateSpecStruct* espec)
     eff_ts = CPU[0].timestamp;
     if(SH7095_mem_timestamp > eff_ts)
      eff_ts = SH7095_mem_timestamp;
+    else if(MDFN_UNLIKELY(CPU[1].timestamp < eff_ts))
+    {
+     // Relaxed sync only: the slave hasn't caught up yet. Don't drag the bus clock past it, or its
+     // next bus access would wait until the master's time and skip its own cycles (the slave ran
+     // up to half its instructions short, e.g. Die Hard Arcade).
+     if(CPU[1].timestamp > SH7095_mem_timestamp)
+      SH7095_mem_timestamp = CPU[1].timestamp;
+    }
     else
      SH7095_mem_timestamp = eff_ts;
    } while(MDFN_LIKELY(eff_ts < next_event_ts));
