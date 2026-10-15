@@ -23,6 +23,10 @@
 **     -k F:ID[:LEN]   hold joypad button ID (libretro id) on port 0 from frame
 **                     F for LEN frames (default 1); repeatable, max 32
 **
+**     -d N:FILE       write the raw core state to FILE after frame N and restart
+**                     the hashes, so they cover only the frames after N (compare
+**                     with a separate "-l FILE -f <rest>" run: cold-load check)
+**
 ** Prints one line per 300 frames (ms/frame) and a final summary:
 **   frames=N video=<fnv1a of all frames> audio=<fnv1a of all samples> samples=N ms/frame=X cpu_ms/frame=Y
 ** (cpu_ms is the main thread's CPU time: wall minus cpu is time spent waiting)
@@ -240,6 +244,26 @@ static void print_thread_cpu(FILE* out, int frames)
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 static double cpu_ms(void) { struct timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
+
+/* Savestate sections (fast path): [name 32][canary 8][data]. Hash each one so a
+   round-trip failure can name the section and frame where the timelines split. */
+#define RT_MAXSEC 64
+static const unsigned char rt_canary[8] = { 0x42, 0xA3, 0x10, 0x87, 0xBC, 0x6D, 0xF2, 0x79 };
+static int rt_sections(const unsigned char* p, size_t sz, uint64_t* hs, char names[][33])
+{
+ size_t starts[RT_MAXSEC + 1]; int n = 0;
+ for(size_t i = 32; i + 8 <= sz && n < RT_MAXSEC; i++)
+  if(p[i] == 0x42 && !memcmp(p + i, rt_canary, 8)) { starts[n++] = i - 32; i += 7; }
+ starts[n] = sz;
+ for(int k = 0; k < n; k++)
+ {
+  uint64_t h = 1469598103934665603ULL;
+  for(size_t i = starts[k] + 40; i < starts[k + 1]; i++) h = (h ^ p[i]) * 1099511628211ULL;
+  hs[k] = h; memcpy(names[k], p + starts[k], 32); names[k][32] = 0;
+ }
+ return n;
+}
+
 int main(int argc, char** argv)
 {
  int frames = 600;
@@ -247,6 +271,7 @@ int main(int argc, char** argv)
  int pin_cpu = -1, rt_frame = -1;
  const char* times_path = NULL;
  const char* load_path = NULL;
+ const char* dump_path = NULL; int dump_frame = -1;
  strcpy(savedir, "/tmp");
  sysdir[0] = 0;
  int i = 1;
@@ -261,6 +286,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-r") && i + 1 < argc) rt_frame = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-l") && i + 1 < argc) load_path = argv[++i];
+  else if(!strcmp(argv[i], "-d") && i + 1 < argc) { dump_frame = atoi(argv[++i]); dump_path = strchr(argv[i], ':'); if(dump_path) dump_path++; }
   else if(!strcmp(argv[i], "-t") && i + 1 < argc) times_path = argv[++i];
   else if(!strcmp(argv[i], "-i") && i + 1 < argc) img_path = argv[++i];
   else if(!strcmp(argv[i], "-k") && i + 1 < argc && nkeys < 32)
@@ -350,6 +376,13 @@ int main(int argc, char** argv)
   const double t0 = now_ms(), c0 = cpu_ms();
   retro_run();
   const double dt = now_ms() - t0, dc = cpu_ms() - c0;
+  if(dump_path && f + 1 == dump_frame)
+  {
+   const size_t n = retro_serialize_size(); void* b = malloc(n); FILE* df = fopen(dump_path, "wb");
+   if(!b || !df || !retro_serialize(b, n) || fwrite(b, 1, n, df) != n) { fprintf(stderr, "%s: state dump failed\n", dump_path); return 1; }
+   fclose(df); free(b);
+   vhash = ahash = 1469598103934665603ULL;
+  }
   if(f >= warm) { t_total += dt; t_win += dt; c_total += dc; if(dt > tmax) tmax = dt; }
   if(times_f) fprintf(times_f, "%.3f\n", dt);
   if(!quiet && (f + 1) % 300 == 0) { fprintf(stderr, "frame %6d  %.2f ms/frame (window)\n", f + 1, t_win / 300.0); t_win = 0; }
@@ -370,14 +403,40 @@ int main(int argc, char** argv)
    {
     if(pass == 1 && !retro_unserialize(st, sz)) { fprintf(stderr, "roundtrip: unserialize failed\n"); rt_fail = 1; break; }
     vhash = ahash = 1469598103934665603ULL;
-    for(int f = 0; f < 300; f++) retro_run();
-    h[pass] = vhash ^ (ahash * 31);
+    for(int f = 0; f < 300; f++)
+    {
+     retro_run();
+     /* per-frame section hashes: pass 0 records, pass 1 reports the first split */
+     static uint64_t sec0[300][RT_MAXSEC]; static int nsec0[300]; static int reported, vreported; static uint64_t v0[300];
+     /* per-frame output hash (vhash/ahash restarted each frame, folded into h[pass]) */
+     const uint64_t fh = vhash ^ (ahash * 31);
+     h[pass] = f ? h[pass] * 1099511628211ULL ^ fh : fh;
+     vhash = ahash = 1469598103934665603ULL;
+     if(pass == 0) v0[f] = fh;
+     else if(v0[f] != fh) { if(!vreported) fprintf(stderr, "roundtrip: first output split at replay frame %d\n", f); vreported++; }
+     if(pass == 1 && f == 299 && vreported) fprintf(stderr, "roundtrip: %d of 300 replay frames differ\n", vreported);
+     uint64_t hs[RT_MAXSEC]; char names[RT_MAXSEC][33];
+     if(!retro_serialize(st2, sz)) continue;
+     const int n = rt_sections(st2, sz, hs, names);
+     if(pass == 0) { memcpy(sec0[f], hs, sizeof(hs)); nsec0[f] = n; }
+     else if(!reported)
+      for(int k = 0; k < n && k < nsec0[f]; k++)
+       if(hs[k] != sec0[f][k]) { fprintf(stderr, "roundtrip: first split at replay frame %d, section %s%s\n", f, names[k], k + 1 < n ? " (first differing)" : ""); reported = 1; break; }
+    }
    }
    /* the restored state must serialize back to the same bytes */
    if(!rt_fail)
    {
     retro_unserialize(st, sz);
-    if(!retro_serialize(st2, sz) || memcmp(st, st2, sz)) { fprintf(stderr, "roundtrip: re-serialized state differs\n"); rt_fail = 1; }
+    if(!retro_serialize(st2, sz) || memcmp(st, st2, sz))
+    {
+     uint64_t ha[RT_MAXSEC], hb[RT_MAXSEC]; char na[RT_MAXSEC][33], nb[RT_MAXSEC][33];
+     const int n = rt_sections(st, sz, ha, na); rt_sections(st2, sz, hb, nb);
+     fprintf(stderr, "roundtrip: re-serialized state differs in:");
+     for(int k = 0; k < n; k++) if(ha[k] != hb[k]) fprintf(stderr, " %s", na[k]);
+     fprintf(stderr, "\n");
+     rt_fail = 1;
+    }
    }
    if(!rt_fail && h[0] != h[1]) { fprintf(stderr, "roundtrip: replay differs (%016llx vs %016llx)\n", (unsigned long long)h[0], (unsigned long long)h[1]); rt_fail = 1; }
    if(!rt_fail) fprintf(stderr, "roundtrip: OK (state %zu bytes, replay hash %016llx)\n", sz, (unsigned long long)h[0]);
