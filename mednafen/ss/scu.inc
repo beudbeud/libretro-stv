@@ -404,7 +404,8 @@ int32 SCU_SetHBVB(int32 pclocks, bool new_HB_FromVDP2, bool new_VB_FromVDP2)
 static void SCU_AdjustTS(const int32 delta)
 {
  SCU_DMA_TimeCounter += delta;
- SCU_DMA_RunUntil += delta;
+ if(SCU_DMA_RunUntil != 0x7FFFFFFF)	// parked while idle (relaxed sync)
+  SCU_DMA_RunUntil += delta;
  for(auto& d : DMALevel)
  {
   if(d.Active < 0)
@@ -1540,6 +1541,10 @@ static void CheckDMAStart(DMALevelS* d)
     RecalcDMAHalt();
    }
   }
+
+  // Relaxed sync: the idle DMA event is disabled (see SCU_UpdateDMA()), re-arm it.
+  if(SH7095_BusSync && d->Active && events[SS_EVENT_SCU_DMA].event_time == SS_EVENT_DISABLED_TS)
+   SS_SetEventNT(&events[SS_EVENT_SCU_DMA], SH7095_mem_timestamp);
  }
 }
 
@@ -1725,6 +1730,14 @@ sscpu_timestamp_t SCU_UpdateDMA(sscpu_timestamp_t timestamp)
   }
  }
 
+ // Relaxed sync: stop polling while no level is active; CheckDMAStart() re-arms the event. RunUntil
+ // parked at the maximum makes the next visit start the time counter at that visit's time.
+ if(SH7095_BusSync && !DMALevel[0].Active && !DMALevel[1].Active && !DMALevel[2].Active)
+ {
+  SCU_DMA_RunUntil = 0x7FFFFFFF;
+  return SS_EVENT_DISABLED_TS;
+ }
+
  return SCU_DMA_RunUntil;
 }
 
@@ -1757,7 +1770,8 @@ static NO_INLINE void ForceDMAFinish(void)
   break;
  }
 
- SCU_DMA_TimeCounter = SCU_DMA_RunUntil;
+ if(SCU_DMA_RunUntil != 0x7FFFFFFF)	// parked while idle (relaxed sync)
+  SCU_DMA_TimeCounter = SCU_DMA_RunUntil;
 }
 
 static INLINE void CheckForceDMAFinish(void)
