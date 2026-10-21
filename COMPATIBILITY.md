@@ -5,9 +5,9 @@ launched and observed booting to title / attract / in-game during testing;
 "Untested" titles are standard 3-button/6-button games with no special hardware
 and are expected to work but have not been individually checked.
 
-**70 titles** — ✅ 23 verified · ⚠️ 1 limited · ❌ 2 non-functional · ▫️ 44 untested *(presumed OK)*
+**70 titles** — ✅ 25 verified · ⚠️ 1 limited · ❌ 2 non-functional · ▫️ 42 untested *(presumed OK)*
 
-Last verified: 2026-06-29.
+Last verified: 2026-10-21.
 
 | Game | Region | Special hardware | Status | Notes |
 |------|--------|------------------|--------|-------|
@@ -18,6 +18,7 @@ Last verified: 2026-06-29.
 | DaeJeon! SanJeon SuJeon | JP | 315-5838 | ✅ Verified | booted to title/attract/in-game this session |
 | Decathlete (V1.000) | JP | 315-5838 | ✅ Verified | booted to title/attract/in-game this session |
 | Decathlete (V1.001) | JP | 315-5838 | ✅ Verified | booted to title/attract/in-game this session |
+| Final Arch | JP |  | ✅ Verified | headless 2026-10-21: coin, start, mode/team select; normal and relaxed SH-2 sync |
 | Final Fight Revenge | JP | 315-5881 | ✅ Verified | booted to title/attract/in-game this session |
 | Hashire Patrol Car | JP | TRACKBALL | ✅ Verified | booted to title/attract/in-game this session |
 | Nerae Super Goal | JP | TRACKBALL | ✅ Verified | booted to title/attract/in-game this session |
@@ -27,6 +28,7 @@ Last verified: 2026-06-29.
 | Shienryu | JP | RAX | ✅ Verified | booted to title/attract/in-game this session |
 | Sky Challenger | JP | TRACKBALL | ✅ Verified | booted to title/attract/in-game this session |
 | Steep Slope Sliders | JP | 315-5881 | ✅ Verified | booted to title/attract/in-game this session |
+| Super Major League | NA |  | ✅ Verified | headless 2026-10-21: coin, start, mode/team select; normal and relaxed SH-2 sync |
 | Tatacot | JP | HAMMER | ✅ Verified | booted to title/attract/in-game this session |
 | Technical Bowling | JP | TRACKBALL | ✅ Verified | booted to title/attract/in-game this session |
 | Tecmo World Cup '98 | JP | 315-5881 | ✅ Verified | booted to title/attract/in-game this session |
@@ -45,7 +47,6 @@ Last verified: 2026-06-29.
 | Die Hard Arcade | NA |  | ▫️ Untested |  |
 | Dynamite Deka | JP |  | ▫️ Untested |  |
 | Ejihon Tantei Jimusyo | JP |  | ▫️ Untested |  |
-| Final Arch | JP |  | ▫️ Untested |  |
 | Final Fight Revenge (V1.000) | JP | 315-5881 | ▫️ Untested | same protection as verified Final Fight Revenge |
 | Find Love | JP |  | ▫️ Untested |  |
 | Funky Head Boxers | JP |  | ▫️ Untested |  |
@@ -72,7 +73,6 @@ Last verified: 2026-06-29.
 | Stress Busters | JP |  | ▫️ Untested |  |
 | Suiko Enbu | JP |  | ▫️ Untested |  |
 | Suiko Enbu / Outlaws of the Lost Dynasty | JP |  | ▫️ Untested |  |
-| Super Major League | NA |  | ▫️ Untested |  |
 | Taisen Tanto-R Sashissu!! | JP |  | ▫️ Untested |  |
 | Virtua Fighter Kids | JP |  | ▫️ Untested |  |
 | Virtua Fighter Remix | JP |  | ▫️ Untested |  |

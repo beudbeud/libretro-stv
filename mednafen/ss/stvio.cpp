@@ -119,8 +119,20 @@ void STVIO_SetTrackball(int dx, int dy)
  if(ControlScheme != STV_CONTROL_TRACKBALL)
   return;
 
- TrackCounter[0] = (uint16)(TrackCounter[0] + dx);
- TrackCounter[1] = (uint16)(TrackCounter[1] + dy);
+ /* Saturate the delta since the game's last latch to a signed byte. Nerae
+  * Super Goal latches only every 2 frames and sign-extends the low byte of the
+  * counter, so more than 127 counts between two latches flips the direction
+  * (a full stick deflection at 400 % sensitivity is 164 counts per frame).
+  * ponytail: clamps the free-running counter too, so a game that latched only
+  * once at boot would stall at +/-127; none of the four trackball games does. */
+ const int axes[2] = { dx, dy };
+ for(unsigned i = 0; i < 2; i++)
+ {
+  int delta = (int16)(uint16)(TrackCounter[i] - TrackBaseline[i]) + axes[i];
+  if(delta > 127) delta = 127;
+  else if(delta < -127) delta = -127;
+  TrackCounter[i] = (uint16)(TrackBaseline[i] + delta);
+ }
 }
 
 void STVIO_TransformInput(void)
