@@ -12,7 +12,7 @@ The core supports all **70 ST-V titles** in the database (64 from Mednafen 1.32.
 
 ## BIOS files
 
-Individual files in the RetroArch system directory, **or** a single `stvbios.zip` containing them (TORRENTZIPPED format supported):
+Individual files in the RetroArch system directory, **or** a single `stvbios.zip` containing them (TORRENTZIPPED format supported). If nothing is found there, the same lookup is done in the ROM's own directory:
 
 | File | Region | SHA-256 |
 |------|--------|---------|

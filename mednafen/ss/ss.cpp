@@ -1538,42 +1538,50 @@ static void MDFN_COLD InitCommon(unsigned cpucache_emumode, unsigned horrible_ha
  }
 
  {
-  const std::string bios_fn  = MDFN_GetSettingS(biospath_sname);
-  const std::string biospath = MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, bios_fn);
+  const std::string bios_fn = MDFN_GetSettingS(biospath_sname);
+  std::string biospath;
 
-  /* Try individual BIOS file first; on failure fall back to stvbios.zip
-   * in the same firmware directory (allows shipping a single archive). */
+  /* Search order: firmware/system dir, then the ROM's own directory.
+   * In each, try the individual BIOS file first, then stvbios.zip. */
+  std::vector<std::string> dirs = { MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, "") };
+  if(gf && !gf->outside.dir.empty())
+   dirs.push_back(gf->outside.dir);
+
   bool bios_loaded = false;
-  try
+  std::string last_err;
+  for(const std::string& d : dirs)
   {
-   FileStream BIOSFile(biospath, FileStream::MODE_READ);
-   if(BIOSFile.size() != 524288)
-    throw MDFN_Error(0, _("BIOS file \"%s\" is of an incorrect size."), MDFN_strhumesc(biospath).c_str());
-   BIOSFile.read(BIOSROM, 512 * 1024);
-   bios_loaded = true;
-  }
-  catch(std::exception&) { /* fall through to zip */ }
-
-  if(!bios_loaded)
-  {
-   const std::string zippath = MDFN_MakeFName(MDFNMKF_FIRMWARE, 0, "stvbios.zip");
+   const std::string sep = (d.size() && d.back() == MDFN_PSS[0]) ? "" : MDFN_PSS;
+   biospath = d + sep + bios_fn;
    try
    {
-    ZIPReader zr(std::unique_ptr<Stream>(new FileStream(zippath, FileStream::MODE_READ)));
+    FileStream BIOSFile(biospath, FileStream::MODE_READ);
+    if(BIOSFile.size() != 524288)
+     throw MDFN_Error(0, _("BIOS file \"%s\" is of an incorrect size."), MDFN_strhumesc(biospath).c_str());
+    BIOSFile.read(BIOSROM, 512 * 1024);
+    bios_loaded = true;
+    break;
+   }
+   catch(std::exception& e) { last_err = e.what(); }
+
+   try
+   {
+    ZIPReader zr(std::unique_ptr<Stream>(new FileStream(d + sep + "stvbios.zip", FileStream::MODE_READ)));
     size_t idx = zr.find_by_path("/" + bios_fn);
     if(idx == SIZE_MAX) idx = zr.find_by_path(bios_fn);
     if(idx == SIZE_MAX)
      throw MDFN_Error(0, _("BIOS \"%s\" not found in stvbios.zip."), bios_fn.c_str());
     std::unique_ptr<Stream> s(zr.open(idx));
     s->read(BIOSROM, 512 * 1024);
-    MDFN_printf(_("[SS] BIOS \"%s\" loaded from stvbios.zip\n"), bios_fn.c_str());
+    MDFN_printf(_("[SS] BIOS \"%s\" loaded from %s\n"), bios_fn.c_str(), MDFN_strhumesc(d + sep + "stvbios.zip").c_str());
+    bios_loaded = true;
+    break;
    }
-   catch(std::exception& ze)
-   {
-    throw MDFN_Error(0, _("BIOS file \"%s\" not found and stvbios.zip fallback failed: %s"),
-                     bios_fn.c_str(), ze.what());
-   }
+   catch(std::exception& e) { last_err = e.what(); }
   }
+
+  if(!bios_loaded)
+   throw MDFN_Error(0, _("BIOS file \"%s\" not found in system or ROM directory (last error: %s)"), bios_fn.c_str(), last_err.c_str());
 
   BIOS_SHA256 = sha256(BIOSROM, 512 * 1024);
 
