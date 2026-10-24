@@ -7,7 +7,8 @@
 ** HLE for the Acclaim RAX (Reconfigurable Audio eXtension) board found in
 ** Batman Forever (STV). The board contains an ADSP-2181 DSP running at
 ** 16.670 MHz, fed commands by the SH-2 via a 16-bit host port at 0x04800000.
-** Audio is output via SPORT0 serial at approximately 44100 Hz stereo.
+** Audio is output via SPORT0 serial at 16.67 MHz / ((SCLKDIV+1)*16) = 31572 Hz
+** stereo (SCLKDIV=0x20), resampled to the 44100 Hz SCSP output.
 **
 ** This program is free software; you can redistribute it and/or
 ** modify it under the terms of the GNU General Public License
@@ -46,8 +47,7 @@ void RAX_Read16(uint32 A, uint16* DB);
  * MAME: batmanfr_sound_comms_w — only upper 16 bits carry sound data. */
 void RAX_WriteCommand(uint16 data);
 
-/* Called once per SCSP sample (~44100 Hz) to mix RAX audio into the output.
- * Currently produces silence; future HLE will mix decoded PCM here. */
+/* Called once per SCSP sample (44100 Hz) to mix RAX audio into the output. */
 void RAX_MixSample(int16* left, int16* right);
 
 void RAX_StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_COLD;
