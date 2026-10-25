@@ -165,7 +165,7 @@ serial port.
 - Standalone ADSP-2181 CPU emulator adapted from MAME's `adsp2100.cpp` (Aaron Giles, BSD-3-Clause).
 - BDMA transfers load firmware segments into DSP program memory; the synthesis engine arms itself via a PM[0x001C] hook patched each BDMA cycle.
 - The BDMA IRQ is pulsed (assert + deassert in one step) to mimic MAME's `pulse_input_line`, ensuring a fresh rising edge for every transfer — matching the hardware's edge-triggered latch behaviour.
-- Audio is sampled at 44 100 Hz (378 DSP cycles/sample) and mixed into the libretro audio ring buffer via the SPORT0-TX autobuffer mechanism.
+- Audio is read from the SPORT0-TX autobuffer at the rate the firmware programs through `S0_SCLKDIV` — 16.67 MHz / ((0x20+1)·16) = **31 572 Hz**, the same formula MAME uses — then linearly resampled to the 44 100 Hz SCSP output. Consuming one frame per SCSP sample instead played the music ~1.4× too fast and high-pitched (issue #43).
 
 ---
 

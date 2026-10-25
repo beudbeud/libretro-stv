@@ -20,6 +20,7 @@
 **                     and write "<tid> <pc> <frame>" lines plus the core's load
 **                     address to FILE; symbolize with nm on the unstripped core
 **     -t FILE         write each frame's wall time (ms), one per line
+**     -a FILE         write all audio samples (raw s16le stereo, 44100 Hz) to FILE
 **     -k F:ID[:LEN]   hold joypad button ID (libretro id) on port 0 from frame
 **                     F for LEN frames (default 1); repeatable, max 32
 **
@@ -56,6 +57,7 @@ static char sysdir[1024], savedir[1024];
 static int quiet;
 static uint64_t vhash = 1469598103934665603ULL, ahash = 1469598103934665603ULL;
 static uint64_t nsamples, nframes_video;
+static FILE* audio_out;
 static unsigned cur_w, cur_h;
 static const char* img_path;
 static int img_frames_left = -1;
@@ -197,8 +199,8 @@ static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch)
   fnv(&vhash, (const uint8_t*)data + y * pitch, (size_t)w * 4);
  nframes_video++;
 }
-static void audio_sample_cb(int16_t l, int16_t r) { int16_t s[2] = { l, r }; fnv(&ahash, s, 4); nsamples++; }
-static size_t audio_batch_cb(const int16_t* data, size_t frames) { fnv(&ahash, data, frames * 4); nsamples += frames; return frames; }
+static void audio_sample_cb(int16_t l, int16_t r) { int16_t s[2] = { l, r }; fnv(&ahash, s, 4); nsamples++; if(audio_out) fwrite(s, 4, 1, audio_out); }
+static size_t audio_batch_cb(const int16_t* data, size_t frames) { fnv(&ahash, data, frames * 4); nsamples += frames; if(audio_out) fwrite(data, 4, frames, audio_out); return frames; }
 static void input_poll_cb(void) {}
 static struct { int frame, id, len; } keys[32];
 static int nkeys;
@@ -282,6 +284,7 @@ int main(int argc, char** argv)
   else if(!strcmp(argv[i], "-s") && i + 1 < argc) snprintf(sysdir, sizeof(sysdir), "%s", argv[++i]);
   else if(!strcmp(argv[i], "-S") && i + 1 < argc) snprintf(savedir, sizeof(savedir), "%s", argv[++i]);
   else if(!strcmp(argv[i], "-q")) quiet = 1;
+  else if(!strcmp(argv[i], "-a") && i + 1 < argc) audio_out = fopen(argv[++i], "wb");
   else if(!strcmp(argv[i], "-p") && i + 1 < argc) prof_path = argv[++i];
   else if(!strcmp(argv[i], "-c") && i + 1 < argc) pin_cpu = atoi(argv[++i]);
   else if(!strcmp(argv[i], "-r") && i + 1 < argc) rt_frame = atoi(argv[++i]);

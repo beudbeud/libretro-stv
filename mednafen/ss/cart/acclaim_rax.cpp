@@ -78,10 +78,19 @@ static int      cmd_fifo_wr;
 
 static bool audio_valid;
 
-/* ── ADSP clock / cycles per output sample ───────────────────────────────── */
+/* ── ADSP clock / output rate ────────────────────────────────────────────── */
 
-/* 16,670,000 Hz ADSP / 44,100 Hz audio ≈ 378 cycles/sample */
-static const int ADSP_CYCLES_PER_SAMPLE = 378;
+static const uint32 ADSP_CLOCK      = 16670000;
+static const uint32 SCSP_RATE       = 44100;
+/* Nominal pace before the firmware programs S0_SCLKDIV: 16.67 MHz / 44.1 kHz */
+static const uint32 ADSP_CYCLES_PER_SAMPLE = 378;
+
+/* SPORT0 → SCSP resampling: 16.16 phase and the last two stereo frames.
+ * The firmware programs SCLKDIV=0x20, i.e. one 16-bit word every 33*16 ADSP
+ * cycles = 31572 Hz (same formula as MAME recompute_sample_rate), so one RAX
+ * frame covers ~1.4 SCSP samples. */
+static uint32 rax_phase;
+static int16  rax_prev[2], rax_cur[2];
 
 /* ── ROM file table ──────────────────────────────────────────────────────── */
 
@@ -408,6 +417,8 @@ void RAX_Reset()
  rom_bank       = 0;
  data_bank      = 0;
  audio_valid    = false;
+ rax_phase      = 0;
+ rax_prev[0] = rax_prev[1] = rax_cur[0] = rax_cur[1] = 0;
 
  if(RAX_ROM)
  {
@@ -449,36 +460,53 @@ void RAX_WriteCommand(uint16 data)
 
 void RAX_MixSample(int16* left, int16* right)
 {
- /* Pulse SPORT0_TX each sample period.  SPORT0_TX uses edge-triggered
-  * latching: SetIRQ(1) always sets the latch, so no prior deassert needed.
-  * The ISR at 0x0010 jumps via PM[0x001C] to the synthesis mixer (0x26BA). */
- ADSP2181_SetIRQ(&rax_cpu, ADSP2181_SPORT0_TX, 1);
- ADSP2181_Run(&rax_cpu, ADSP_CYCLES_PER_SAMPLE);
+ const uint32 cyc = ctrl_regs[S0_SCLKDIV_REG] ? ((uint32)ctrl_regs[S0_SCLKDIV_REG] + 1) * 16
+                                             : ADSP_CYCLES_PER_SAMPLE;
 
- /* Read L+R directly from the SPORT0 autobuffer ring in DM.
-  * S0_AUTOBUF_REG decodes: ireg = bits[11:9], mreg = bits[9:7] | (ireg & 4).
-  * The firmware sets I7/M7/L7 for the ring; we advance I7 circularly per sample. */
- int ab_ireg = (ctrl_regs[S0_AUTOBUF_REG] >> 9) & 7;
- int ab_mreg = (ctrl_regs[S0_AUTOBUF_REG] >> 7) & 3;
- ab_mreg |= (ab_ireg & 4);
- int32_t stride = (int32_t)rax_cpu.m[ab_mreg];
- int32_t len    = (int32_t)rax_cpu.l[ab_ireg];
- if(stride > 0 && len > 0 && (ctrl_regs[SYSCONTROL_REG] & 0x1000))
+ rax_phase += (uint32)(((uint64)ADSP_CLOCK << 16) / ((uint64)cyc * SCSP_RATE));
+ while(rax_phase >= 0x10000)
  {
-  uint32_t i    = rax_cpu.i[ab_ireg];
-  uint32_t base = rax_cpu.base[ab_ireg];
-  auto circ_adv = [&](uint32_t addr) -> uint32_t {
-   addr = (addr + (uint32_t)stride) & 0x3fff;
-   if(addr < base)                       addr += (uint32_t)len;
-   else if(addr >= base + (uint32_t)len) addr -= (uint32_t)len;
-   return addr;
-  };
-  *left  = (int16_t)dm_read_addr(i);
-  i = circ_adv(i);
-  *right = (int16_t)dm_read_addr(i);
-  i = circ_adv(i);
-  rax_cpu.i[ab_ireg] = i;
+  rax_phase -= 0x10000;
+  rax_prev[0] = rax_cur[0];
+  rax_prev[1] = rax_cur[1];
+
+  /* Pulse SPORT0_TX each RAX sample period.  SPORT0_TX uses edge-triggered
+   * latching: SetIRQ(1) always sets the latch, so no prior deassert needed.
+   * The ISR at 0x0010 jumps via PM[0x001C] to the synthesis mixer (0x26BA). */
+  ADSP2181_SetIRQ(&rax_cpu, ADSP2181_SPORT0_TX, 1);
+  ADSP2181_Run(&rax_cpu, (int)cyc);
+
+  /* Read L+R directly from the SPORT0 autobuffer ring in DM.
+   * S0_AUTOBUF_REG decodes: ireg = bits[11:9], mreg = bits[9:7] | (ireg & 4).
+   * The firmware sets I7/M7/L7 for the ring; we advance I7 circularly per sample. */
+  int ab_ireg = (ctrl_regs[S0_AUTOBUF_REG] >> 9) & 7;
+  int ab_mreg = (ctrl_regs[S0_AUTOBUF_REG] >> 7) & 3;
+  ab_mreg |= (ab_ireg & 4);
+  int32_t stride = (int32_t)rax_cpu.m[ab_mreg];
+  int32_t len    = (int32_t)rax_cpu.l[ab_ireg];
+  if(stride > 0 && len > 0 && (ctrl_regs[SYSCONTROL_REG] & 0x1000))
+  {
+   uint32_t i    = rax_cpu.i[ab_ireg];
+   uint32_t base = rax_cpu.base[ab_ireg];
+   auto circ_adv = [&](uint32_t addr) -> uint32_t {
+    addr = (addr + (uint32_t)stride) & 0x3fff;
+    if(addr < base)                       addr += (uint32_t)len;
+    else if(addr >= base + (uint32_t)len) addr -= (uint32_t)len;
+    return addr;
+   };
+   rax_cur[0] = (int16_t)dm_read_addr(i);
+   i = circ_adv(i);
+   rax_cur[1] = (int16_t)dm_read_addr(i);
+   i = circ_adv(i);
+   rax_cpu.i[ab_ireg] = i;
+  }
+  else
+   rax_cur[0] = rax_cur[1] = 0;
  }
+
+ /* Linear interpolation between the two most recent RAX frames. */
+ *left  = (int16)(rax_prev[0] + (((int32)rax_cur[0] - rax_prev[0]) * (int32)rax_phase >> 16));
+ *right = (int16)(rax_prev[1] + (((int32)rax_cur[1] - rax_prev[1]) * (int32)rax_phase >> 16));
 }
 
 /* ── Save state ──────────────────────────────────────────────────────────── */
@@ -496,6 +524,9 @@ void RAX_StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFVAR(rom_bank),
   SFVAR(data_bank),
   SFVAR(audio_valid),
+  SFVAR(rax_phase),
+  SFPTR16N(rax_prev, 2, "rax_prev"),
+  SFPTR16N(rax_cur,  2, "rax_cur"),
   SFEND
  };
 
