@@ -1,0 +1,7 @@
+cheats = 2
+cheat0_desc = "Infinite Credits"
+cheat0_code = "06000740:09"
+cheat0_enable = false
+cheat1_desc = "Infinite Time"
+cheat1_code = "0603DE00:03E7"
+cheat1_enable = false
