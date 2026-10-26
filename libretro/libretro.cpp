@@ -12,15 +12,6 @@
 #include <string>
 #include <stdarg.h>
 
-#if defined(__MINGW32__) && defined(__x86_64__)
-#include <fenv.h>
-/* mingw-w64 4b519671 (2026-10-22) moved __mingw_fe_dfl_env out of libmingwex's
- * fesetenv.o, so a -static link of the DLL fails with an undefined reference
- * until msys2 ships 5b128fcd (2026-10-24, CRT_fp10.o back into libmingwex.a).
- * Weak so a CRT definition still wins; remove once msys2's crt package is fixed. */
-extern "C" const fenv_t __mingw_fe_dfl_env __attribute__((weak)) = { 0x3f3f003f, 0 };
-#endif
-
 /* mednafen headers — found via -I src/ with src/mednafen/ proxy dir */
 #include "mednafen.h"          /* types, settings etc. */
 #include "mednafen-driver.h"   /* MDFNI_Init, MDFNI_LoadGame, MDFNI_Emulate… */

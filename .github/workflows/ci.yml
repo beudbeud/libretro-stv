@@ -69,6 +69,11 @@ jobs:
           objdump -p build/libretro/mednafen_stv_libretro.dll | grep 'DLL Name'
           ! objdump -p build/libretro/mednafen_stv_libretro.dll | grep -iE 'libstdc|libgcc|winpthread|zlib1|zstd'
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mednafen_stv_libretro_windows_x86_64
+          path: build/libretro/mednafen_stv_libretro.dll
+
   build-macos:
     strategy:
       matrix:
