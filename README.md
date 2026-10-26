@@ -29,6 +29,16 @@ Save states and RetroArch rewind are fully supported. The state size is computed
 
 ---
 
+## Cheats
+
+The core handles RetroArch cheats with the "Emulator" handler as work-RAM writes re-applied after
+every frame, like a MAME "run" script. A code is `ADDR:VALUE` in hex (several joined with `+`);
+the value width (2, 4 or 8 digits) selects a byte, word or dword write, and `ADDR` is a Saturn bus
+address in work RAM (`0x00200000`-`0x002FFFFF` or `0x06000000`-`0x060FFFFF`), so MAME addresses
+work as they are. `tools/mame2cht.py cotton2.xml` turns a game's XML from the MAME cheat
+collection into a `.cht` file (plain-write "run" cheats and their parameters; the rest is listed on
+stderr). RetroArch's own cheat search and "RetroArch" handler also work through the memory map.
+
 ## Input mapping
 
 ### Gamepad (3-button / 6-button games)

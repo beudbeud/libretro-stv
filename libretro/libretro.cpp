@@ -941,6 +941,8 @@ static void frame_stats(bool begin)
     }
 }
 
+static void apply_cheats(void);
+
 RETRO_API void retro_run(void)
 {
     if(!game_info || !surf) return;
@@ -999,6 +1001,7 @@ RETRO_API void retro_run(void)
     espec.NeedRewind      = false;
 
     MDFNI_Emulate(&espec);
+    apply_cheats();
 
     if(g_stv_skip_bios && !g_bios_state_path.empty()
        && !(g_bios_state_saved && g_bios_intback_resaved)) {
@@ -1164,8 +1167,64 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
     }
 }
 
-RETRO_API void retro_cheat_reset(void) {}
-RETRO_API void retro_cheat_set(unsigned, bool, const char*) {}
+/* Core-handled cheats (RetroArch "emulator" handler): work-RAM writes re-applied after every
+ * frame, like a MAME "run" script.  Code = ADDR:VALUE, several joined by '+', all hex; the value
+ * width (2, 4 or 8 digits) selects a byte, word or dword write.  ADDR is a Saturn bus address in
+ * work RAM (0x00200000-0x002FFFFF or 0x06000000-0x060FFFFF); anything else is ignored.
+ * tools/mame2cht.py converts a MAME cheat XML into this format. */
+struct cheat_write { uint32_t addr, val; unsigned len; };
+static std::vector<std::vector<cheat_write>> g_cheats;
+static std::vector<bool> g_cheat_on;
+
+static void apply_cheats(void)
+{
+    for(size_t i = 0; i < g_cheats.size(); i++) {
+        if(!g_cheat_on[i]) continue;
+        for(const cheat_write& w : g_cheats[i]) {
+            uint16_t* ram;
+            if((w.addr & 0xFFF00000) == 0x06000000)      ram = MDFN_IEN_SS::SS_GetWorkRAMH();
+            else if((w.addr & 0xFFF00000) == 0x00200000) ram = MDFN_IEN_SS::SS_GetWorkRAML();
+            else continue;
+            const uint32_t off = w.addr & 0xFFFFF;
+            if(off + w.len > 0x100000) continue;
+            switch(w.len) {
+            case 1:  ne16_wbo_be<uint8_t >(ram, off, w.val); break;
+            case 2:  ne16_wbo_be<uint16_t>(ram, off, w.val); break;
+            default: ne16_wbo_be<uint32_t>(ram, off, w.val); break;
+            }
+        }
+    }
+}
+
+RETRO_API void retro_cheat_reset(void) { g_cheats.clear(); g_cheat_on.clear(); }
+
+RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char* code)
+{
+    if(g_cheats.size() <= index) { g_cheats.resize(index + 1); g_cheat_on.resize(index + 1, false); }
+    g_cheat_on[index] = enabled;
+    g_cheats[index].clear();
+    if(!code) return;
+    std::string s;
+    for(const char* c = code; *c; c++) {
+        if(*c == ' ' || *c == '\t') continue;
+        s += (*c == ';' || *c == ',') ? '+' : *c;
+    }
+    for(size_t p = 0; p < s.size();) {
+        size_t e = s.find('+', p); if(e == std::string::npos) e = s.size();
+        const std::string tok = s.substr(p, e - p); p = e + 1;
+        const size_t colon = tok.find(':');
+        if(colon == std::string::npos || colon == 0 || colon + 1 >= tok.size()) {
+            lr_log(RETRO_LOG_WARN, "cheat %u: ignoring code '%s' (expected ADDR:VALUE)\n", index, tok.c_str());
+            continue;
+        }
+        const std::string v = tok.substr(colon + 1);
+        cheat_write w;
+        w.addr = (uint32_t)strtoul(tok.c_str(), nullptr, 16);
+        w.val  = (uint32_t)strtoul(v.c_str(), nullptr, 16);
+        w.len  = v.size() <= 2 ? 1 : v.size() <= 4 ? 2 : 4;
+        g_cheats[index].push_back(w);
+    }
+}
 RETRO_API unsigned retro_get_region(void)
 {
     /* From the loaded game's actual refresh rate: ss.region_default is ignored
