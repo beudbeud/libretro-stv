@@ -53,7 +53,12 @@ endif()
 target_link_libraries(mednafen_stv_libretro PRIVATE mdfn_core ${ZSTD_LINK})
 
 # RetroArch does not ship the MinGW runtime DLLs: link them in (issue #39).
-target_link_options(mednafen_stv_libretro PRIVATE $<$<BOOL:${MINGW}>:-static>)
+# No runtime pseudo-relocations: a CRT symbol that ends up auto-imported from
+# msvcrt.dll (1.8.1: _fpreset, issue #46) aborts the DLL at load time on Windows,
+# so make it a link error instead.
+if(MINGW)
+    target_link_options(mednafen_stv_libretro PRIVATE -static -Wl,--disable-runtime-pseudo-reloc)
+endif()
 
 set_target_properties(mednafen_stv_libretro PROPERTIES
     C_VISIBILITY_PRESET   hidden
