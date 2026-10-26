@@ -1,0 +1,10 @@
+cheats = 3
+cheat0_desc = "Infinite Credits"
+cheat0_code = "00183D05:09"
+cheat0_enable = false
+cheat1_desc = "P1 Enemy attacks are worthless"
+cheat1_code = "06087507:00+06087671:00"
+cheat1_enable = false
+cheat2_desc = "P2 Enemy attacks are worthless"
+cheat2_code = "06087509:00+0608766F:00"
+cheat2_enable = false

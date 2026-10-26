@@ -1,0 +1,7 @@
+cheats = 2
+cheat0_desc = "P1 Infinite Time"
+cheat0_code = "060E72F3:0A+060E730D:46"
+cheat0_enable = false
+cheat1_desc = "P2 Infinite Time"
+cheat1_code = "060E7373:0A+060E738D:46"
+cheat1_enable = false

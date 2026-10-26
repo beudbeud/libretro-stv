@@ -1170,11 +1170,13 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
 /* Core-handled cheats (RetroArch "emulator" handler): work-RAM writes re-applied after every
  * frame, like a MAME "run" script.  Code = ADDR:VALUE, several joined by '+', all hex; the value
  * width (2, 4 or 8 digits) selects a byte, word or dword write.  ADDR is a Saturn bus address in
- * work RAM (0x00200000-0x002FFFFF or 0x06000000-0x060FFFFF); anything else is ignored.
- * tools/mame2cht.py converts a MAME cheat XML into this format. */
+ * work RAM (0x00200000-0x002FFFFF or 0x06000000-0x060FFFFF); anything else is ignored.  A leading
+ * '!' makes the code one-shot: written once each time the cheat is enabled (MAME "on" scripts,
+ * "Finish this round now!").  tools/mame2cht.py converts a MAME cheat XML into this format. */
 struct cheat_write { uint32_t addr, val; unsigned len; };
 static std::vector<std::vector<cheat_write>> g_cheats;
 static std::vector<bool> g_cheat_on;
+static std::vector<bool> g_cheat_once;   // one-shot: g_cheat_on is cleared after the first write
 
 static void apply_cheats(void)
 {
@@ -1193,17 +1195,23 @@ static void apply_cheats(void)
             default: ne16_wbo_be<uint32_t>(ram, off, w.val); break;
             }
         }
+        if(g_cheat_once[i]) g_cheat_on[i] = false;
     }
 }
 
-RETRO_API void retro_cheat_reset(void) { g_cheats.clear(); g_cheat_on.clear(); }
+RETRO_API void retro_cheat_reset(void) { g_cheats.clear(); g_cheat_on.clear(); g_cheat_once.clear(); }
 
 RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char* code)
 {
-    if(g_cheats.size() <= index) { g_cheats.resize(index + 1); g_cheat_on.resize(index + 1, false); }
+    if(g_cheats.size() <= index) {
+        g_cheats.resize(index + 1); g_cheat_on.resize(index + 1, false); g_cheat_once.resize(index + 1, false);
+    }
     g_cheat_on[index] = enabled;
     g_cheats[index].clear();
     if(!code) return;
+    while(*code == ' ') code++;
+    g_cheat_once[index] = (*code == '!');
+    if(g_cheat_once[index]) code++;
     std::string s;
     for(const char* c = code; *c; c++) {
         if(*c == ' ' || *c == '\t') continue;

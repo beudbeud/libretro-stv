@@ -1,0 +1,7 @@
+cheats = 2
+cheat0_desc = "Infinite Credits"
+cheat0_code = "00183D05:09"
+cheat0_enable = false
+cheat1_desc = "Infinite Lives"
+cheat1_code = "0607DD1B:0A"
+cheat1_enable = false
