@@ -254,6 +254,7 @@ struct TileFetcher
 
  bool nt_ok[4];
  bool cg_ok[4];
+ bool CoeffPerDot;	// RBG only: a rotation parameter reads its coefficient table per dot (DKAx != 0)
 
  // n=0...3, NBG0...3
  // n=4, RBG0
@@ -301,8 +302,13 @@ struct TileFetcher
    {
     if(!(BGON & 0x20) || n == 4)
     {
-     nt_ok[bank] = (rdbs == RDBS_NAME) && (bank < 2 || !(BGON & 0x20));
-     cg_ok[bank] = (rdbs == RDBS_CHAR) && (bank < 2 || !(BGON & 0x20));
+     // A bank designated for the coefficient table only has its access cycles taken when the
+     // coefficients are read per dot (SSDD VDP2 §6.2: read per line, "the coefficient table can be
+     // stored in any bank").  Taisen Tanto-R Sashissu reads them per line and keeps RBG0 character
+     // data in the lower half of that bank (A1), which MAME displays (issue #45).
+     const bool coeff_free = (rdbs == RDBS_COEFF) && !CoeffPerDot;
+     nt_ok[bank] = (rdbs == RDBS_NAME || coeff_free) && (bank < 2 || !(BGON & 0x20));
+     cg_ok[bank] = (rdbs == RDBS_CHAR || coeff_free) && (bank < 2 || !(BGON & 0x20));
     }
     else
     {
@@ -1939,6 +1945,7 @@ static void SetupRotVars(const T* rs, const unsigned rbg_w)
   LB.rotv[i].tf.PlaneSize = (PLSZ >> ( 8 + (i << 2))) & 0x3;
   LB.rotv[i].tf.PlaneOver = (PLSZ >> (10 + (i << 2))) & 0x3;
   LB.rotv[i].tf.PlaneOverChar = OVPNR[i];
+  LB.rotv[i].tf.CoeffPerDot = (rs[0].DKAx != 0) || (rs[1].DKAx != 0);
   LB.rotv[i].tf.Start(4 + i, !i && ((CHCTLB >> 9) & 1), (MPOFR >> (i << 2)) & 0x7, RotMapRegs[i]);
  }
 
@@ -3773,6 +3780,8 @@ void VDP2REND_Reset(bool powering_up)
 
 void VDP2REND_SetLayerEnableMask(uint64 mask)
 {
+ if(const char* lm = getenv("MDFN_SS_LAYERMASK"))	// debug: bits 0-3 NBG0-3, 4 RBG0, 5 RBG1, 6 sprites
+  mask = strtoul(lm, nullptr, 0);
  WWQ(COMMAND_SET_LEM, mask);
 }
 
