@@ -1997,10 +1997,11 @@ static MDFN_COLD void LoadCD(std::vector<CDInterface*>* CDInterfaces)
 
 static MDFN_COLD void CloseGame(void)
 {
-#ifdef MDFN_ENABLE_DEV_BUILD
- try { VDP1::MakeDump("/tmp/vdp1_dump.h"); } catch(std::exception& e) { MDFND_OutputNotice(MDFN_NOTICE_ERROR, e.what()); }
- try { VDP2::MakeDump("/tmp/vdp2_dump.h"); } catch(std::exception& e) { MDFND_OutputNotice(MDFN_NOTICE_ERROR, e.what()); }
-#endif
+ if(const char* dd = getenv("MDFN_SS_VDPDUMP"))	// directory receiving vdp1_dump.h / vdp2_dump.h (regs, CRAM, VRAM) at close
+ {
+  try { VDP1::MakeDump(std::string(dd) + "/vdp1_dump.h"); } catch(std::exception& e) { MDFND_OutputNotice(MDFN_NOTICE_ERROR, e.what()); }
+  try { VDP2::MakeDump(std::string(dd) + "/vdp2_dump.h"); } catch(std::exception& e) { MDFND_OutputNotice(MDFN_NOTICE_ERROR, e.what()); }
+ }
  //
  //
 
