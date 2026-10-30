@@ -53,6 +53,8 @@ Action buttons are mapped ergonomically to face buttons:
 
 Coin insertion uses edge detection (one press = one coin).
 
+With no stick to click (arcade panel), `mednafen_stv_test_button` and `mednafen_stv_service_button` move Test and Service onto **Start held 5 s** and **Start + B held 5 s**: the press happens the moment the five seconds are reached, and Start and B still reach the game meanwhile.
+
 Tate (vertical cabinet) games are detected automatically from the game database and reported to the frontend via `SET_ROTATION`. The `mednafen_stv_rotation` option overrides this for special setups (e.g. a physically-rotated screen).
 
 ### Touchscreen (Critter Crusher)
@@ -106,6 +108,8 @@ Both analog stick indices are read, so the stick works regardless of which index
 | `mednafen_stv_crosshair` | `enabled` | Show crosshair overlay for touchscreen games (Critter Crusher) |
 | `mednafen_stv_crosshair_color` | `white` | Crosshair colour: White / Red / Green / Blue / Yellow / Cyan |
 | `mednafen_stv_trackball_sensitivity` | `100` | Roll speed of the analog stick / D-pad for trackball games (25–400%). Higher rolls faster at full deflection. Does not affect mouse / real-trackball input. |
+| `mednafen_stv_test_button` | `l3` | Cabinet **Test** button (operator menu): L3 of player 1, or Start held alone for 5 s, for arcade panels with no stick to click. |
+| `mednafen_stv_service_button` | `r3` | Cabinet **Service** button (free credit, cursor of most operator menus): R3 of player 1, or Start + B held together for 5 s. |
 
 ### Video
 

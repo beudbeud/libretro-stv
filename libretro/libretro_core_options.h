@@ -53,6 +53,12 @@ static struct retro_core_option_v2_definition option_defs_us[] = {
    { "mednafen_stv_trackball_sensitivity", "Trackball Analog Stick Sensitivity", NULL,
       "Roll speed of the left analog stick for trackball games (Hashire Patrol Car, Sky Challenger, Nerae! Super Goal, Technical Bowling). Higher rolls faster at full deflection. Does not affect mouse/real trackball input.", NULL, "input",
       { {"25","25%"},{"50","50%"},{"75","75%"},{"100","100%"},{"150","150%"},{"200","200%"},{"300","300%"},{"400","400%"},{NULL,NULL} }, "100" },
+   { "mednafen_stv_test_button", "Test Button", NULL,
+      "The cabinet TEST button, which opens the operator menu and validates in it. 'L3' is a click of the left stick on player 1. 'Hold Start 5 s' is for arcade panels with no stick to click: Start held alone for five seconds presses TEST once, the moment the five seconds are reached. Start still reaches the game during the hold.", NULL, "input",
+      { {"l3","L3"},{"start_hold","Hold Start 5 s"},{NULL,NULL} }, "l3" },
+   { "mednafen_stv_service_button", "Service Button", NULL,
+      "The cabinet SERVICE button: a credit that counts no coin, and the cursor of most operator menus. 'R3' is a click of the right stick on player 1. 'Hold Start + B 5 s' is for arcade panels with no stick to click: Start and B held together for five seconds press SERVICE once, the moment the five seconds are reached. Both still reach the game during the hold.", NULL, "input",
+      { {"r3","R3"},{"start_b_hold","Hold Start + B 5 s"},{NULL,NULL} }, "r3" },
 
    /* ── Video ── */
    { "mednafen_stv_correct_aspect", "Correct Aspect Ratio", NULL, NULL, NULL, "video",

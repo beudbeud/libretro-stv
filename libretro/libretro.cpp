@@ -9,6 +9,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <cmath>
+#include <algorithm>
 #include <string>
 #include <stdarg.h>
 
@@ -278,6 +279,27 @@ static uint8_t *builtin_ptr = nullptr;
 /* Track coin button edge to pulse coin signal */
 static bool coin_was_pressed[2] = {};
 
+/* ── Operator buttons on a long hold ──
+ * Arcade panels have no stick to click, so TEST / SERVICE can be moved onto
+ * Start held 5 s / Start + B held 5 s. The press fires once, the moment the
+ * hold time is reached; the chord must be released before it fires again.
+ * Counted in frames of the game refresh rate, so the press is deterministic. */
+static bool g_test_on_hold    = false;  /* mednafen_stv_test_button    = start_hold   */
+static bool g_service_on_hold = false;  /* mednafen_stv_service_button = start_b_hold */
+struct long_hold {
+    unsigned held = 0, press = 0; bool fired = false;
+    bool update(bool down, unsigned threshold, unsigned press_len) {
+        if(!down) { held = 0; fired = false; }
+        else if(!fired && ++held >= threshold) { fired = true; press = press_len; }
+        if(!press) return false;
+        press--; return true;
+    }
+    void reset() { held = 0; press = 0; fired = false; }
+};
+static long_hold g_test_hold, g_service_hold;
+#define OPERATOR_HOLD_SECONDS  5.0
+#define OPERATOR_PRESS_SECONDS 0.2
+
 static void update_input()
 {
     if(!input_poll_cb || !input_state_cb) return;
@@ -376,13 +398,25 @@ static void update_input()
     if(builtin_ptr) {
         uint8_t b = 0;
 
-        /* Test button (bit 2) */
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3))
-            b |= (1 << 2);
+        double fps = (double)game_info->fps / (65536.0 * 256.0);
+        unsigned hold_frames  = std::max(1u, (unsigned)lround(OPERATOR_HOLD_SECONDS  * fps));
+        unsigned press_frames = std::max(1u, (unsigned)lround(OPERATOR_PRESS_SECONDS * fps));
+        bool start = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
+        bool btn_b = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
 
-        /* Service button (bit 3) */
-        if(input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3))
-            b |= (1 << 3);
+        /* Test button (bit 2): L3, or Start alone held 5 s. B pressed during a
+         * Start hold turns it into the Service chord, so one gesture never
+         * fires both buttons. Start and B still reach the game meanwhile. */
+        bool test = g_test_on_hold
+            ? g_test_hold.update(start && !btn_b, hold_frames, press_frames)
+            : input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3) != 0;
+        if(test) b |= (1 << 2);
+
+        /* Service button (bit 3): R3, or Start + B held 5 s */
+        bool service = g_service_on_hold
+            ? g_service_hold.update(start && btn_b, hold_frames, press_frames)
+            : input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3) != 0;
+        if(service) b |= (1 << 3);
 
         /* Pause button (bit 4) */
         if(input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3))
@@ -402,6 +436,87 @@ static void update_input()
             MDFN_QSimpleCommand(MDFN_MSC_INSERT_COIN);
         coin_was_pressed[p] = coin_now;
     }
+}
+
+/* Input descriptors — shown in RetroArch's control remapping UI. An operator
+ * button moved onto a long hold leaves the list: its stick click is ignored. */
+static void send_input_descriptors()
+{
+    static const struct retro_input_descriptor desc_hammer[] = {
+        {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_X,      "Touch X"},
+        {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_Y,      "Touch Y"},
+        {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_PRESSED,"Touch"},
+        {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_SELECT,  "Insert Coin"},
+        {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_L3,      "Test Button"},
+        {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_R3,      "Service Button"},
+        {0,0,0,0,nullptr},
+    };
+    static const struct retro_input_descriptor desc_trackball[] = {
+        {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
+        {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
+        {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
+        {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT, "Trackball Left"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT,"Trackball Right"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,   "Trackball Up"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN, "Trackball Down"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L3,    "Test Button"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Service Button"},
+        {0,0,0,0,nullptr},
+    };
+    static const struct retro_input_descriptor desc[] = {
+        /* Player 1 */
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_Y,     "X"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_X,     "Y"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L,     "Z"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L2,    "Left Shoulder (L)"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R2,    "Right Shoulder (R)"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L3,    "Test Button"},
+        {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Service Button"},
+        /* Player 2 */
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_Y,     "X"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_X,     "Y"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L,     "Z"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L2,    "Left Shoulder (L)"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R2,    "Right Shoulder (R)"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
+        {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Pause Button"},
+        {0,0,0,0,nullptr},
+    };
+    const struct retro_input_descriptor *src =
+        g_is_hammer ? desc_hammer : g_is_trackball ? desc_trackball : desc;
+    static struct retro_input_descriptor out[sizeof(desc) / sizeof(desc[0])];
+    unsigned n = 0;
+    for(; src->description; src++) {
+        bool p1_pad = src->port == 0 && src->device == RETRO_DEVICE_JOYPAD;
+        if(p1_pad && src->id == RETRO_DEVICE_ID_JOYPAD_L3 && g_test_on_hold)    continue;
+        if(p1_pad && src->id == RETRO_DEVICE_ID_JOYPAD_R3 && g_service_on_hold) continue;
+        out[n++] = *src;
+    }
+    out[n] = {0,0,0,0,nullptr};
+    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)out);
 }
 
 /* ── Core options ─────────────────────────────────────────────────────────── */
@@ -543,6 +658,21 @@ static void apply_options()
         int pct = atoi(var.value);
         if(pct < 1) pct = 1;
         g_trackball_sensitivity = pct;
+    }
+
+    bool test_before = g_test_on_hold, service_before = g_service_on_hold;
+    var.key = "mednafen_stv_test_button";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        g_test_on_hold = !strcmp(var.value, "start_hold");
+    var.key = "mednafen_stv_service_button";
+    if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+        g_service_on_hold = !strcmp(var.value, "start_b_hold");
+    if(test_before != g_test_on_hold || service_before != g_service_on_hold) {
+        /* A hold started under the other setting must not fire under this one. */
+        g_test_hold.reset();
+        g_service_hold.reset();
+        /* The frontend shows where each control is; the load publishes them itself. */
+        if(game_info) send_input_descriptors();
     }
 }
 
@@ -765,77 +895,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
     lr_log(RETRO_LOG_INFO,"Loaded: %s @ %.3fHz\n", game->path,
            (double)game_info->fps/(65536.0*256.0));
 
-    /* Input descriptors — shown in RetroArch's control remapping UI */
-    if(g_is_hammer) {
-        static const struct retro_input_descriptor desc_hammer[] = {
-            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_X,      "Touch X"},
-            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_Y,      "Touch Y"},
-            {0,RETRO_DEVICE_POINTER,0,RETRO_DEVICE_ID_POINTER_PRESSED,"Touch"},
-            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_SELECT,  "Insert Coin"},
-            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_L3,      "Test Button"},
-            {0,RETRO_DEVICE_JOYPAD, 0,RETRO_DEVICE_ID_JOYPAD_R3,      "Service Button"},
-            {0,0,0,0,nullptr},
-        };
-        environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_hammer);
-    } else if(g_is_trackball) {
-        static const struct retro_input_descriptor desc_trackball[] = {
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_X,"Trackball X"},
-            {0,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_RIGHT,RETRO_DEVICE_ID_ANALOG_Y,"Trackball Y"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT, "Trackball Left"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT,"Trackball Right"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,   "Trackball Up"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN, "Trackball Down"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L3,    "Test Button"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Service Button"},
-            {0,0,0,0,nullptr},
-        };
-        environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc_trackball);
-    } else {
-        static const struct retro_input_descriptor desc[] = {
-            /* Player 1 */
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_Y,     "X"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_X,     "Y"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L,     "Z"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L2,    "Left Shoulder (L)"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R2,    "Right Shoulder (R)"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L3,    "Test Button"},
-            {0,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Service Button"},
-            /* Player 2 */
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_UP,    "Up"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_START, "Start"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_B,     "A"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_A,     "B"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R,     "C"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_Y,     "X"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_X,     "Y"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L,     "Z"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_L2,    "Left Shoulder (L)"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R2,    "Right Shoulder (R)"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_SELECT,"Insert Coin"},
-            {1,RETRO_DEVICE_JOYPAD,0,RETRO_DEVICE_ID_JOYPAD_R3,    "Pause Button"},
-            {0,0,0,0,nullptr},
-        };
-        environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
-    }
+    send_input_descriptors();
 
     /* Signal display rotation from the Display Rotation option (see
      * effective_rotation): Auto follows the game database, an explicit value
@@ -914,7 +974,13 @@ RETRO_API void retro_unload_game(void)
     g_bios_state_path.clear();
 }
 
-RETRO_API void retro_reset(void) { if(game_info) MDFNI_Reset(); }
+RETRO_API void retro_reset(void)
+{
+    if(game_info) MDFNI_Reset();
+    /* Nor an operator chord half held when the reset came. */
+    g_test_hold.reset();
+    g_service_hold.reset();
+}
 
 /* MDFN_SS_FRAMESTATS=1: every 300 frames, log the real frame rate (interval
  * between retro_run calls, i.e. what the frontend achieves) and the time spent
