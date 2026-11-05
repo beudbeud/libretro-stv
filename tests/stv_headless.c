@@ -5,6 +5,7 @@
 **     -s DIR          system directory (BIOS; default: directory of the ROM)
 **     -S DIR          save directory (default: /tmp)
 **     -o key=value    core option (repeatable), e.g. -o mednafen_stv_autortc=disabled
+**     -C ADDR:VAL     core cheat code (repeatable), applied from the first frame
 **     -w FRAMES       warm-up frames excluded from timing (default 0)
 **     -q              quiet: only the final summary line
 **     -c CPU          pin the main thread to this CPU (Linux)
@@ -204,6 +205,8 @@ static size_t audio_batch_cb(const int16_t* data, size_t frames) { fnv(&ahash, d
 static void input_poll_cb(void) {}
 static struct { int frame, id, len; } keys[32];
 static int nkeys;
+static const char* cheats[32];
+static int ncheats;
 static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id)
 {
  (void)index;
@@ -297,6 +300,7 @@ int main(int argc, char** argv)
    keys[nkeys].len = 1;
    if(sscanf(argv[++i], "%d:%d:%d", &keys[nkeys].frame, &keys[nkeys].id, &keys[nkeys].len) >= 2) nkeys++;
   }
+  else if(!strcmp(argv[i], "-C") && i + 1 < argc && ncheats < 32) cheats[ncheats++] = argv[++i];
   else if(!strcmp(argv[i], "-o") && i + 1 < argc && nopts < 32)
   {
    const char* kv = argv[++i]; const char* eq = strchr(kv, '=');
@@ -307,7 +311,7 @@ int main(int argc, char** argv)
   }
   else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
  }
- if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-q] [-p prof] [-c cpu] core.so rom\n", argv[0]); return 2; }
+ if(argc - i != 2) { fprintf(stderr, "usage: %s [-f N] [-w N] [-s sysdir] [-S savedir] [-o k=v]... [-C ADDR:VAL]... [-q] [-p prof] [-c cpu] core.so rom\n", argv[0]); return 2; }
  const char* core = argv[i], *rom = argv[i + 1];
  if(!sysdir[0])
  {
@@ -337,12 +341,14 @@ int main(int argc, char** argv)
  typedef void (*retro_run_t)(void);
  typedef void (*retro_get_system_av_info_t)(struct retro_system_av_info*);
  typedef size_t (*retro_serialize_size_t)(void);
+ typedef void (*retro_cheat_set_t)(unsigned, bool, const char*);
  typedef bool (*retro_serialize_t)(void*, size_t);
  typedef bool (*retro_unserialize_t)(const void*, size_t);
  SYM(retro_set_environment) SYM(retro_set_video_refresh) SYM(retro_set_audio_sample) SYM(retro_set_audio_sample_batch)
  SYM(retro_set_input_poll) SYM(retro_set_input_state) SYM(retro_init) SYM(retro_deinit) SYM(retro_load_game)
  SYM(retro_unload_game) SYM(retro_run) SYM(retro_get_system_av_info)
  SYM(retro_serialize_size) SYM(retro_serialize) SYM(retro_unserialize)
+ SYM(retro_cheat_set)
 
  retro_set_environment(env_cb);
  retro_init();
@@ -354,6 +360,7 @@ int main(int argc, char** argv)
 
  struct retro_game_info gi; memset(&gi, 0, sizeof(gi)); gi.path = rom;
  if(!retro_load_game(&gi)) { fprintf(stderr, "retro_load_game failed\n"); return 1; }
+ for(int i = 0; i < ncheats; i++) retro_cheat_set(i, true, cheats[i]);
  struct retro_system_av_info av; retro_get_system_av_info(&av);
  cur_w = av.geometry.base_width; cur_h = av.geometry.base_height;
  if(load_path)

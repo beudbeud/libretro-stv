@@ -1,0 +1,4 @@
+cheats = 1
+cheat0_desc = "Answer 1 always correct"
+cheat0_code = "0604B03D:00"
+cheat0_enable = false
