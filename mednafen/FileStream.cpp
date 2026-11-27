@@ -685,6 +685,10 @@ void FileStream::lock(bool nb)
  {
   ErrnoHolder ene(errno);
 
+  // Android FUSE/sdcardfs storage doesn't support flock(); run unlocked there.
+  if(ene.Errno() == ENOSYS || ene.Errno() == EOPNOTSUPP || ene.Errno() == EINVAL)
+   return;
+
   throw MDFN_Error(ene.Errno(), _("Error locking opened file \"%s\": %s"), path_humesc.c_str(), ene.StrError());
  } 
 
